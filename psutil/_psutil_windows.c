@@ -3821,7 +3821,7 @@ PyMODINIT_FUNC PyInit__psutil_windows(void)
 
 #else
 #define INITERROR return
-void init_psutil_windows(void)
+__declspec(dllexport) void init_psutil_windows(void)
 #endif
 {
     struct module_state *st = NULL;

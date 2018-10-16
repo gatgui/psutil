@@ -13,7 +13,6 @@ prjs = []
 cppflags = ""
 linkflags = ""
 defs = ["PSUTIL_VERSION={}".format(version.replace(".", ""))]
-posix = ["psutil/_psutil_posix.c", "psutil/_psutil_common.c"]
 
 
 if sys.platform != "win32":
@@ -32,8 +31,10 @@ if sys.platform != "win32":
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
                      "symvis": "default",
-                     "srcs": posix + ["psutil/_psutil_osx.c",
-                                      "psutil/arch/osx/process_info.c"],
+                     "srcs": ["psutil/_psutil_common.c",
+                              "psutil/_psutil_posix.c",
+                              "psutil/_psutil_osx.c",
+                              "psutil/arch/osx/process_info.c"],
                      "deps": [],
                      "custom": [python.SoftRequire]})
 
@@ -49,12 +50,13 @@ if sys.platform != "win32":
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
                      "symvis": "default",
-                     "srcs": posix + ["psutil/_psutil_linux.c"],
+                     "srcs": ["psutil/_psutil_common.c",
+                              "psutil/_psutil_posix.c",
+                              "psutil/_psutil_linux.c"],
                      "deps": [],
                      "custom": [python.SoftRequire]})
 
-
-prjs.append({"name": "_psutil_posix",
+    prjs.append({"name": "_psutil_posix",
              "type": "dynamicmodule",
              "alias": "psutil-libs",
              "defs": defs,
@@ -64,12 +66,38 @@ prjs.append({"name": "_psutil_posix",
              "linkflags": linkflags,
              "incdirs": ["psutil"],
              "symvis": "default",
-             "srcs": posix,
+             "srcs": ["psutil/_psutil_common.c",
+                      "psutil/_psutil_posix.c"],
              "deps": [],
              "custom": [python.SoftRequire]})
 
+else:
+    cppflags += " /wd4152 /wd4306 /wd4127 /wd4189 /wd4100 /wd4244 /wd4201 /wd4706 /wd4701"
+    defs.append("PSUTIL_WINDOWS")
+
+    prjs.append({"name": "_psutil_windows",
+                 "type": "dynamicmodule",
+                 "alias": "psutil-libs",
+                 "defs": defs,
+                 "ext": python.ModuleExtension(),
+                 "prefix": "python/psutil/{}".format(python_version),
+                 "cppflags": cppflags,
+                 "linkflags": linkflags,
+                 "incdirs": ["psutil"],
+                 "srcs": ["psutil/_psutil_common.c",
+                          "psutil/_psutil_windows.c",
+                          "psutil/arch/windows/process_info.c",
+                          "psutil/arch/windows/process_handles.c",
+                          "psutil/arch/windows/security.c",
+                          "psutil/arch/windows/inet_ntop.c",
+                          "psutil/arch/windows/services.c",],
+                 "deps": [],
+                 "libs": ["psapi", "kernel32", "advapi32", "shell32", "netapi32", "iphlpapi", "wtsapi32", "ws2_32", "PowrProf"],
+                 "custom": [python.SoftRequire]})
+
 
 prjs.append({"name": "psutil",
+             "alias": "psutil-py",
              "type": "install",
              "install": {"python/psutil": excons.Glob("psutil/*.py")}
              })
