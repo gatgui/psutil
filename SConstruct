@@ -4,7 +4,7 @@ from excons.tools import python
 
 version = "5.4.7"
 env = excons.MakeBaseEnv()
-python_version = "{}.{}".format(sys.version_info[0], sys.version_info[1])
+python_version = excons.GetArgument("with-python", "2.7")
 
 
 prjs = []
