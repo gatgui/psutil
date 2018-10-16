@@ -26,7 +26,7 @@ if sys.platform != "win32":
                      "alias": "psutil-libs",
                      "defs": defs,
                      "ext": python.ModuleExtension(),
-                     "prefix": "python/psutil/{}".format(python_version),
+                     "prefix": "psutil/{}".format(python_version),
                      "cppflags": cppflags,
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
@@ -45,7 +45,7 @@ if sys.platform != "win32":
                      "alias": "psutil-libs",
                      "defs": defs,
                      "ext": python.ModuleExtension(),
-                     "prefix": "python/psutil/{}".format(python_version),
+                     "prefix": "psutil/{}".format(python_version),
                      "cppflags": cppflags,
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
@@ -61,7 +61,7 @@ if sys.platform != "win32":
              "alias": "psutil-libs",
              "defs": defs,
              "ext": python.ModuleExtension(),
-             "prefix": "python/psutil/{}".format(python_version),
+             "prefix": "psutil/{}".format(python_version),
              "cppflags": cppflags,
              "linkflags": linkflags,
              "incdirs": ["psutil"],
@@ -80,7 +80,7 @@ else:
                  "alias": "psutil-libs",
                  "defs": defs,
                  "ext": python.ModuleExtension(),
-                 "prefix": "python/psutil/{}".format(python_version),
+                 "prefix": "psutil/{}".format(python_version),
                  "cppflags": cppflags,
                  "linkflags": linkflags,
                  "incdirs": ["psutil"],
@@ -99,7 +99,7 @@ else:
 prjs.append({"name": "psutil",
              "alias": "psutil-py",
              "type": "install",
-             "install": {"python/psutil": excons.Glob("psutil/*.py")}
+             "install": {"psutil": excons.Glob("psutil/*.py")}
              })
 
 excons.DeclareTargets(env, prjs)
