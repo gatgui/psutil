@@ -1,10 +1,12 @@
 import excons
 import sys
 from excons.tools import python
+from distutils import sysconfig
+
 
 version = "5.4.7"
 env = excons.MakeBaseEnv()
-python_version = excons.GetArgument("with-python", "2.7")
+python_version = excons.GetArgument("with-python", sysconfig.get_python_version())
 
 
 prjs = []
