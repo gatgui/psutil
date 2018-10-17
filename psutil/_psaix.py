@@ -31,6 +31,7 @@ from ._compat import PY3
 from ._exceptions import AccessDenied
 from ._exceptions import NoSuchProcess
 from ._exceptions import ZombieProcess
+from . import PROCFS_PATH
 
 
 __extra__all__ = ["PROCFS_PATH"]
@@ -107,7 +108,7 @@ pmmap_ext = namedtuple(
 
 def get_procfs_path():
     """Return updated psutil.PROCFS_PATH constant."""
-    return sys.modules['psutil'].PROCFS_PATH
+    return PROCFS_PATH
 
 
 # =====================================================================
