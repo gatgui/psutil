@@ -14,7 +14,7 @@ prjs = []
 
 cppflags = ""
 linkflags = ""
-defs = ["PSUTIL_VERSION={}".format(version.replace(".", ""))]
+defs = ["PSUTIL_VERSION={ver}".format(ver=version.replace(".", ""))]
 
 
 if sys.platform != "win32":
@@ -28,7 +28,7 @@ if sys.platform != "win32":
                      "alias": "psutil-libs",
                      "defs": defs,
                      "ext": python.ModuleExtension(),
-                     "prefix": "psutil/{}/{}".format(python_version, sys.platform),
+                     "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                      "cppflags": cppflags,
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
@@ -47,7 +47,7 @@ if sys.platform != "win32":
                      "alias": "psutil-libs",
                      "defs": defs,
                      "ext": python.ModuleExtension(),
-                     "prefix": "psutil/{}/{}".format(python_version, sys.platform),
+                     "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                      "cppflags": cppflags,
                      "linkflags": linkflags,
                      "incdirs": ["psutil"],
@@ -63,7 +63,7 @@ if sys.platform != "win32":
              "alias": "psutil-libs",
              "defs": defs,
              "ext": python.ModuleExtension(),
-             "prefix": "psutil/{}/{}".format(python_version, sys.platform),
+             "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
              "cppflags": cppflags,
              "linkflags": linkflags,
              "incdirs": ["psutil"],
@@ -82,7 +82,7 @@ else:
                  "alias": "psutil-libs",
                  "defs": defs,
                  "ext": python.ModuleExtension(),
-                 "prefix": "psutil/{}/{}".format(python_version, sys.platform),
+                 "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                  "cppflags": cppflags,
                  "linkflags": linkflags,
                  "incdirs": ["psutil"],
