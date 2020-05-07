@@ -116,6 +116,7 @@ psutil_raise_for_pid(long pid, char *syscall) {
         PyErr_Format(PyExc_RuntimeError, "%s syscall failed", syscall);
 }
 
+#ifndef PSUTIL_POSIX_APIONLY
 
 /*
  * Given a PID return process priority as a Python integer.
@@ -415,6 +416,7 @@ error:
     return PyErr_SetFromErrno(PyExc_OSError);
 }
 
+#endif /* PSUTIL_POSIX_APIONLY */
 
 /*
  * net_if_stats() macOS/BSD implementation.
