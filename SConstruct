@@ -52,7 +52,7 @@ if sys.platform != "win32":
                               "psutil/arch/osx/process_info.c"],
                      "deps": [],
                      "custom": [python.SoftRequire]})
-        outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_osx{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
+        outputs.append("{outdir}/psutil/{pyver}/{plat}/{pfx}_psutil_osx{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, pfx=mod_pfx, ext=ext))
 
     else:
         modname = "%s_psutil_linux" % mod_pfx
@@ -72,7 +72,7 @@ if sys.platform != "win32":
                               "psutil/_psutil_linux.c"],
                      "deps": [],
                      "custom": [python.SoftRequire]})
-        outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_linux{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
+        outputs.append("{outdir}/psutil/{pyver}/{plat}/{pfx}_psutil_linux{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, pfx=mod_pfx, ext=ext))
 
     modname = "%s_psutil_posix" % mod_pfx
     prjs.append({"name": modname,
@@ -89,7 +89,7 @@ if sys.platform != "win32":
                          "psutil/_psutil_posix.c"],
                  "deps": [],
                  "custom": [python.SoftRequire]})
-    outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_posix{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
+    outputs.append("{outdir}/psutil/{pyver}/{plat}/{pfx}_psutil_posix{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, pfx=mod_pfx, ext=ext))
 
 else:
     def get_winver():
@@ -129,7 +129,7 @@ else:
                  "deps": [],
                  "libs": ["psapi", "kernel32", "advapi32", "shell32", "netapi32", "wtsapi32", "ws2_32", "PowrProf", "pdh"],
                  "custom": [python.SoftRequire]})
-    outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_windows{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
+    outputs.append("{outdir}/psutil/{pyver}/{plat}/{pfx}_psutil_windows{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, pfx=mod_pfx, ext=ext))
 
 
 prjs.append({"name": "psutil",
