@@ -1661,6 +1661,9 @@ struct module_state {
 static struct module_state _state;
 #endif
 
+#define _STR1(x) #x
+#define _STR(y) _STR1(y)
+
 #if PY_MAJOR_VERSION >= 3
 
 static int psutil_windows_traverse(PyObject *m, visitproc visit, void *arg) {
@@ -1675,7 +1678,7 @@ static int psutil_windows_clear(PyObject *m) {
 
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    "psutil_windows",
+    _STR(PSUTIL_MODULE_NAME),
     NULL,
     sizeof(struct module_state),
     PsutilMethods,
@@ -1686,19 +1689,26 @@ static struct PyModuleDef moduledef = {
 };
 
 #define INITERROR return NULL
+#define _INITFUNCNAME1(x) PyInit_ ## x
+#define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
 
-PyMODINIT_FUNC PyInit__psutil_windows(void)
+PyMODINIT_FUNC _INITFUNCNAME0(PSUTIL_MODULE_NAME) (void)
 
 #else
+
 #define INITERROR return
-__declspec(dllexport) void init_psutil_windows(void)
+#define _INITFUNCNAME1(x) init ## x
+#define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
+
+__declspec(dllexport) void _INITFUNCNAME0(PSUTIL_MODULE_NAME) (void)
+
 #endif
 {
     struct module_state *st = NULL;
 #if PY_MAJOR_VERSION >= 3
     PyObject *module = PyModule_Create(&moduledef);
 #else
-    PyObject *module = Py_InitModule("_psutil_windows", PsutilMethods);
+    PyObject *module = Py_InitModule(_STR(PSUTIL_MODULE_NAME), PsutilMethods);
 #endif
     if (module == NULL)
         INITERROR;
@@ -1711,7 +1721,7 @@ __declspec(dllexport) void init_psutil_windows(void)
         INITERROR;
 
     st = GETSTATE(module);
-    st->error = PyErr_NewException("_psutil_windows.Error", NULL, NULL);
+    st->error = PyErr_NewException(_STR(PSUTIL_MODULE_NAME) ".Error", NULL, NULL);
     if (st->error == NULL) {
         Py_DECREF(module);
         INITERROR;
@@ -1719,12 +1729,12 @@ __declspec(dllexport) void init_psutil_windows(void)
 
     // Exceptions.
     TimeoutExpired = PyErr_NewException(
-        "_psutil_windows.TimeoutExpired", NULL, NULL);
+        _STR(PSUTIL_MODULE_NAME) ".TimeoutExpired", NULL, NULL);
     Py_INCREF(TimeoutExpired);
     PyModule_AddObject(module, "TimeoutExpired", TimeoutExpired);
 
     TimeoutAbandoned = PyErr_NewException(
-        "_psutil_windows.TimeoutAbandoned", NULL, NULL);
+        _STR(PSUTIL_MODULE_NAME) ".TimeoutAbandoned", NULL, NULL);
     Py_INCREF(TimeoutAbandoned);
     PyModule_AddObject(module, "TimeoutAbandoned", TimeoutAbandoned);
 

@@ -630,13 +630,17 @@ static PyMethodDef mod_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
+#define _STR1(x) #x
+#define _STR(y) _STR1(y)
 
 #if PY_MAJOR_VERSION >= 3
     #define INITERR return NULL
+    #define _INITFUNCNAME1(x) PyInit_ ## x
+    #define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
 
     static struct PyModuleDef moduledef = {
         PyModuleDef_HEAD_INIT,
-        "_psutil_posix",
+        _STR(PSUTIL_MODULE_NAME),
         NULL,
         -1,
         mod_methods,
@@ -646,17 +650,20 @@ static PyMethodDef mod_methods[] = {
         NULL
     };
 
-    PyObject *PyInit__psutil_posix(void)
+    PyObject* _INITFUNCNAME0(PSUTIL_MODULE_NAME)(void)
 #else  /* PY_MAJOR_VERSION */
     #define INITERR return
+    #define _INITFUNCNAME1(x) init ## x
+    #define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
 
-    void init_psutil_posix(void)
+    void _INITFUNCNAME0(PSUTIL_MODULE_NAME)(void)
+
 #endif  /* PY_MAJOR_VERSION */
 {
 #if PY_MAJOR_VERSION >= 3
     PyObject *mod = PyModule_Create(&moduledef);
 #else
-    PyObject *mod = Py_InitModule("_psutil_posix", mod_methods);
+    PyObject *mod = Py_InitModule(_STR(PSUTIL_MODULE_NAME), mod_methods);
 #endif
     if (mod == NULL)
         INITERR;

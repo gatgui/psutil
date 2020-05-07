@@ -19,6 +19,7 @@ linkflags = ""
 defs = ["PSUTIL_VERSION={ver}".format(ver=version.replace(".", ""))]
 outputs = []
 out_dir = excons.OutputBaseDirectory()
+mod_pfx = excons.GetArgument("module-prefix", "")
 
 if struct.calcsize("l") <= 8:
     defs.append("PSUTIL_SIZEOF_PID_T=4")
@@ -33,11 +34,12 @@ if sys.platform != "win32":
 
     if sys.platform == "darwin":
         linkflags += " -framework IOKit -framework CoreFoundation"
+        modname = "%s_psutil_osx" % mod_pfx
         defs.append("PSUTIL_OSX=1")
-        prjs.append({"name": "_psutil_osx",
+        prjs.append({"name": modname,
                      "type": "dynamicmodule",
                      "alias": "psutil-libs",
-                     "defs": defs,
+                     "defs": defs + ["PSUTIL_MODULE_NAME=%s" % modname],
                      "ext": ext,
                      "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                      "cppflags": cppflags,
@@ -53,11 +55,12 @@ if sys.platform != "win32":
         outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_osx{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 
     else:
+        modname = "%s_psutil_linux" % mod_pfx
         defs.append("PSUTIL_LINUX=1")
-        prjs.append({"name": "_psutil_linux",
+        prjs.append({"name": modname,
                      "type": "dynamicmodule",
                      "alias": "psutil-libs",
-                     "defs": defs,
+                     "defs": defs + ["PSUTIL_MODULE_NAME=%s" % modname],
                      "ext": ext,
                      "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                      "cppflags": cppflags,
@@ -71,20 +74,21 @@ if sys.platform != "win32":
                      "custom": [python.SoftRequire]})
         outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_linux{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 
-    prjs.append({"name": "_psutil_posix",
-             "type": "dynamicmodule",
-             "alias": "psutil-libs",
-             "defs": defs,
-             "ext": ext,
-             "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
-             "cppflags": cppflags,
-             "linkflags": linkflags,
-             "incdirs": ["psutil"],
-             "symvis": "default",
-             "srcs": ["psutil/_psutil_common.c",
-                      "psutil/_psutil_posix.c"],
-             "deps": [],
-             "custom": [python.SoftRequire]})
+    modname = "%s_psutil_posix" % mod_pfx
+    prjs.append({"name": modname,
+                 "type": "dynamicmodule",
+                 "alias": "psutil-libs",
+                 "defs": defs + ["PSUTIL_MODULE_NAME=%s" % modname],
+                 "ext": ext,
+                 "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
+                 "cppflags": cppflags,
+                 "linkflags": linkflags,
+                 "incdirs": ["psutil"],
+                 "symvis": "default",
+                 "srcs": ["psutil/_psutil_common.c",
+                         "psutil/_psutil_posix.c"],
+                 "deps": [],
+                 "custom": [python.SoftRequire]})
     outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_posix{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 
 else:
@@ -93,16 +97,18 @@ else:
         return '0x0%s' % ((maj * 100) + min)
 
     cppflags += " /wd4152 /wd4306 /wd4127 /wd4189 /wd4100 /wd4244 /wd4201 /wd4706 /wd4701 /wd4214 /wd4057 /wd4204"
-    defs.extend(["PSUTIL_WINDOWS=1",
-                 "PSAPI_VERSION=1"])
-                 #"_WIN32_WINNT=%s" % get_winver(),
-                 #"_AVAIL_WINVER_=%s" % get_winver(),
-                 #"_CRT_SECURE_NO_WARNINGS"])
+    modname = "%s_psutil_windows" % mod_pfx
 
-    prjs.append({"name": "_psutil_windows",
+    defs.extend(["PSUTIL_WINDOWS=1",
+                 "PSAPI_VERSION=1",
+                 "_WIN32_WINNT=%s" % get_winver(),
+                 "_AVAIL_WINVER_=%s" % get_winver(),
+                 "_CRT_SECURE_NO_WARNINGS"])
+
+    prjs.append({"name": modname,
                  "type": "dynamicmodule",
                  "alias": "psutil-libs",
-                 "defs": defs,
+                 "defs": defs + ["PSUTIL_MODULE_NAME=%s" % modname],
                  "ext": ext,
                  "prefix": "psutil/{pyver}/{plat}".format(pyver=python_version, plat=sys.platform),
                  "cppflags": cppflags,

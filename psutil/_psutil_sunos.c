@@ -1696,6 +1696,9 @@ struct module_state {
 #define GETSTATE(m) (&_state)
 #endif
 
+#define _STR1(x) #x
+#define _STR(y) _STR1(y)
+
 #if PY_MAJOR_VERSION >= 3
 
 static int
@@ -1712,7 +1715,7 @@ psutil_sunos_clear(PyObject *m) {
 
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    "psutil_sunos",
+    _STR(PSUTIL_MODULE_NAME),
     NULL,
     sizeof(struct module_state),
     PsutilMethods,
@@ -1723,19 +1726,25 @@ static struct PyModuleDef moduledef = {
 };
 
 #define INITERROR return NULL
+#define _INITFUNCNAME1(x) PyInit_ ## x
+#define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
 
-PyMODINIT_FUNC PyInit__psutil_sunos(void)
+PyMODINIT_FUNC _INITFUNCNAME0(PSUTIL_MODULE_NAME)(void)
 
 #else
-#define INITERROR return
 
-void init_psutil_sunos(void)
+#define INITERROR return
+#define _INITFUNCNAME1(x) init ## x
+#define _INITFUNCNAME0(y) _INITFUNCNAME1(y)
+
+void _INITFUNCNAME0(PSUTIL_MODULE_NAME)(void)
+
 #endif
 {
 #if PY_MAJOR_VERSION >= 3
     PyObject *module = PyModule_Create(&moduledef);
 #else
-    PyObject *module = Py_InitModule("_psutil_sunos", PsutilMethods);
+    PyObject *module = Py_InitModule(_STR(PSUTIL_MODULE_NAME), PsutilMethods);
 #endif
     if (module == NULL)
         INITERROR;
