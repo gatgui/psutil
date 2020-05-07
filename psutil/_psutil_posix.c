@@ -604,6 +604,8 @@ psutil_net_if_duplex_speed(PyObject *self, PyObject *args) {
 #endif  // net_if_stats() macOS/BSD implementation
 
 
+#ifndef PSUTIL_POSIX_APIONLY
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -685,3 +687,5 @@ static PyMethodDef mod_methods[] = {
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* PSUTIL_POSIX_APIONLY */
