@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (c) 2009 Giampaolo Rodola'. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
@@ -22,49 +22,14 @@ import shutil
 import sys
 
 from psutil import __version__ as PSUTIL_VERSION
+from psutil._common import bytes2human
+from psutil._common import print_color
 
 
 BASE_URL = 'https://ci.appveyor.com/api'
-PY_VERSIONS = ['2.7', '3.5', '3.6', '3.7']
+PY_VERSIONS = ['2.7', '3.5', '3.6', '3.7', '3.8']
 TIMEOUT = 30
 COLORS = True
-
-
-def exit(msg=""):
-    if msg:
-        print(hilite(msg, ok=False), file=sys.stderr)
-    sys.exit(1)
-
-
-def term_supports_colors(file=sys.stdout):
-    try:
-        import curses
-        assert file.isatty()
-        curses.setupterm()
-        assert curses.tigetnum("colors") > 0
-    except Exception:
-        return False
-    else:
-        return True
-
-
-COLORS = term_supports_colors()
-
-
-def hilite(s, ok=True, bold=False):
-    """Return an highlighted version of 'string'."""
-    if not COLORS:
-        return s
-    attr = []
-    if ok is None:  # no color
-        pass
-    elif ok:   # green
-        attr.append('32')
-    else:   # red
-        attr.append('31')
-    if bold:
-        attr.append('1')
-    return '\x1b[%sm%s\x1b[0m' % (';'.join(attr), s)
 
 
 def safe_makedirs(path):
@@ -87,24 +52,6 @@ def safe_rmtree(path):
     shutil.rmtree(path, onerror=onerror)
 
 
-def bytes2human(n):
-    """
-    >>> bytes2human(10000)
-    '9.8 K'
-    >>> bytes2human(100001221)
-    '95.4 M'
-    """
-    symbols = ('K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
-    prefix = {}
-    for i, s in enumerate(symbols):
-        prefix[s] = 1 << (i + 1) * 10
-    for s in reversed(symbols):
-        if n >= prefix[s]:
-            value = float(n) / prefix[s]
-            return '%.2f %s' % (value, s)
-    return '%.2f B' % (n)
-
-
 def download_file(url):
     local_fname = url.split('/')[-1]
     local_fname = os.path.join('dist', local_fname)
@@ -120,24 +67,26 @@ def download_file(url):
 
 
 def get_file_urls(options):
-    session = requests.Session()
-    data = session.get(
-        BASE_URL + '/projects/' + options.user + '/' + options.project,
-        timeout=TIMEOUT)
-    data = data.json()
-
-    urls = []
-    for job in (job['jobId'] for job in data['build']['jobs']):
-        job_url = BASE_URL + '/buildjobs/' + job + '/artifacts'
-        data = session.get(job_url, timeout=TIMEOUT)
+    with requests.Session() as session:
+        data = session.get(
+            BASE_URL + '/projects/' + options.user + '/' + options.project,
+            timeout=TIMEOUT)
         data = data.json()
-        for item in data:
-            file_url = job_url + '/' + item['fileName']
-            urls.append(file_url)
-    if not urls:
-        exit("no artifacts found")
-    for url in sorted(urls, key=lambda x: os.path.basename(x)):
-        yield url
+
+        urls = []
+        for job in (job['jobId'] for job in data['build']['jobs']):
+            job_url = BASE_URL + '/buildjobs/' + job + '/artifacts'
+            data = session.get(job_url, timeout=TIMEOUT)
+            data = data.json()
+            for item in data:
+                file_url = job_url + '/' + item['fileName']
+                urls.append(file_url)
+        if not urls:
+            print_color("no artifacts found", 'ret')
+            sys.exit(1)
+        else:
+            for url in sorted(urls, key=lambda x: os.path.basename(x)):
+                yield url
 
 
 def rename_27_wheels():
@@ -152,7 +101,7 @@ def rename_27_wheels():
     os.rename(src, dst)
 
 
-def main(options):
+def run(options):
     safe_rmtree('dist')
     urls = get_file_urls(options)
     completed = 0
@@ -163,9 +112,9 @@ def main(options):
             url = fut_to_url[fut]
             try:
                 local_fname = fut.result()
-            except Exception as _:
-                exc = _
-                print("error while downloading %s: %s" % (url, exc))
+            except Exception:
+                print_color("error while downloading %s" % (url), 'red')
+                raise
             else:
                 completed += 1
                 print("downloaded %-45s %s" % (
@@ -179,10 +128,14 @@ def main(options):
     rename_27_wheels()
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(
         description='AppVeyor artifact downloader')
     parser.add_argument('--user', required=True)
     parser.add_argument('--project', required=True)
     args = parser.parse_args()
-    main(args)
+    run(args)
+
+
+if __name__ == '__main__':
+    main()

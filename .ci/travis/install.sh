@@ -21,12 +21,12 @@ if [[ "$(uname -s)" == 'Darwin' ]]; then
         #     pyenv virtualenv 2.6.9 psutil
         #     ;;
         py27)
-            pyenv install 2.7.10
-            pyenv virtualenv 2.7.10 psutil
+            pyenv install 2.7.16
+            pyenv virtualenv 2.7.16 psutil
             ;;
-        py34)
-            pyenv install 3.4.3
-            pyenv virtualenv 3.4.3 psutil
+        py36)
+            pyenv install 3.6.6
+            pyenv virtualenv 3.6.6 psutil
             ;;
     esac
     pyenv rehash
@@ -39,4 +39,4 @@ elif [[ $TRAVIS_PYTHON_VERSION == '2.7' ]] || [[ $PYVER == 'py27' ]]; then
     pip install -U ipaddress mock
 fi
 
-pip install -U coverage coveralls flake8 pep8 setuptools
+pip install -U coverage coveralls flake8 setuptools

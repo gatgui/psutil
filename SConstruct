@@ -1,10 +1,12 @@
 import excons
+import os
 import sys
 from excons.tools import python
 from distutils import sysconfig
+import struct
 
 
-version = "5.4.7"
+version = "5.7.0"
 env = excons.MakeBaseEnv()
 python_version = excons.GetArgument("with-python", sysconfig.get_python_version())
 ext = python.ModuleExtension()
@@ -18,12 +20,20 @@ defs = ["PSUTIL_VERSION={ver}".format(ver=version.replace(".", ""))]
 outputs = []
 out_dir = excons.OutputBaseDirectory()
 
+if struct.calcsize("l") <= 8:
+    defs.append("PSUTIL_SIZEOF_PID_T=4")
+else:
+    defs.append("PSUTIL_SIZEOF_PID_T=8")
+
+if os.name == "posix":
+    defs.append("PSUTIL_POSIX=1")
+
 if sys.platform != "win32":
     cppflags += " -Wno-unused-parameter"
 
     if sys.platform == "darwin":
         linkflags += " -framework IOKit -framework CoreFoundation"
-        defs.append("PSUTIL_OSX")
+        defs.append("PSUTIL_OSX=1")
         prjs.append({"name": "_psutil_osx",
                      "type": "dynamicmodule",
                      "alias": "psutil-libs",
@@ -43,7 +53,7 @@ if sys.platform != "win32":
         outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_osx{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 
     else:
-        defs.append("PSUTIL_LINUX")
+        defs.append("PSUTIL_LINUX=1")
         prjs.append({"name": "_psutil_linux",
                      "type": "dynamicmodule",
                      "alias": "psutil-libs",
@@ -78,8 +88,16 @@ if sys.platform != "win32":
     outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_posix{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 
 else:
-    cppflags += " /wd4152 /wd4306 /wd4127 /wd4189 /wd4100 /wd4244 /wd4201 /wd4706 /wd4701"
-    defs.append("PSUTIL_WINDOWS")
+    def get_winver():
+        maj, min = sys.getwindowsversion()[0:2]
+        return '0x0%s' % ((maj * 100) + min)
+
+    cppflags += " /wd4152 /wd4306 /wd4127 /wd4189 /wd4100 /wd4244 /wd4201 /wd4706 /wd4701 /wd4214 /wd4057 /wd4204"
+    defs.extend(["PSUTIL_WINDOWS=1",
+                 "PSAPI_VERSION=1"])
+                 #"_WIN32_WINNT=%s" % get_winver(),
+                 #"_AVAIL_WINVER_=%s" % get_winver(),
+                 #"_CRT_SECURE_NO_WARNINGS"])
 
     prjs.append({"name": "_psutil_windows",
                  "type": "dynamicmodule",
@@ -92,13 +110,18 @@ else:
                  "incdirs": ["psutil"],
                  "srcs": ["psutil/_psutil_common.c",
                           "psutil/_psutil_windows.c",
+                          "psutil/arch/windows/process_utils.c",
                           "psutil/arch/windows/process_info.c",
                           "psutil/arch/windows/process_handles.c",
+                          "psutil/arch/windows/disk.c",
+                          "psutil/arch/windows/net.c",
+                          "psutil/arch/windows/cpu.c",
                           "psutil/arch/windows/security.c",
-                          "psutil/arch/windows/inet_ntop.c",
-                          "psutil/arch/windows/services.c",],
+                          "psutil/arch/windows/services.c",
+                          "psutil/arch/windows/socks.c",
+                          "psutil/arch/windows/wmi.c"],
                  "deps": [],
-                 "libs": ["psapi", "kernel32", "advapi32", "shell32", "netapi32", "iphlpapi", "wtsapi32", "ws2_32", "PowrProf"],
+                 "libs": ["psapi", "kernel32", "advapi32", "shell32", "netapi32", "wtsapi32", "ws2_32", "PowrProf", "pdh"],
                  "custom": [python.SoftRequire]})
     outputs.append("{outdir}/psutil/{pyver}/{plat}/_psutil_windows{ext}".format(outdir=out_dir, pyver=python_version, plat=sys.platform, ext=ext))
 

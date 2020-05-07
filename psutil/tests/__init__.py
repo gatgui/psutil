@@ -32,15 +32,18 @@ import traceback
 import warnings
 from socket import AF_INET
 from socket import AF_INET6
-from socket import SOCK_DGRAM
 from socket import SOCK_STREAM
 
 import psutil
+from psutil import AIX
 from psutil import MACOS
 from psutil import POSIX
 from psutil import SUNOS
 from psutil import WINDOWS
 from psutil._common import supports_ipv6
+from psutil._compat import ChildProcessError
+from psutil._compat import FileExistsError
+from psutil._compat import FileNotFoundError
 from psutil._compat import PY3
 from psutil._compat import u
 from psutil._compat import unicode
@@ -68,8 +71,8 @@ __all__ = [
     # constants
     'APPVEYOR', 'DEVNULL', 'GLOBAL_TIMEOUT', 'MEMORY_TOLERANCE', 'NO_RETRIES',
     'PYPY', 'PYTHON_EXE', 'ROOT_DIR', 'SCRIPTS_DIR', 'TESTFILE_PREFIX',
-    'TESTFN', 'TESTFN_UNICODE', 'TOX', 'TRAVIS', 'VALID_PROC_STATUSES',
-    'VERBOSITY',
+    'TESTFN', 'TESTFN_UNICODE', 'TOX', 'TRAVIS', 'CIRRUS', 'CI_TESTING',
+    'VALID_PROC_STATUSES',
     "HAS_CPU_AFFINITY", "HAS_CPU_FREQ", "HAS_ENVIRON", "HAS_PROC_IO_COUNTERS",
     "HAS_IONICE", "HAS_MEMORY_MAPS", "HAS_PROC_CPU_NUM", "HAS_RLIMIT",
     "HAS_SENSORS_BATTERY", "HAS_BATTERY", "HAS_SENSORS_FANS",
@@ -81,8 +84,7 @@ __all__ = [
     'ThreadTask'
     # test utils
     'unittest', 'skip_on_access_denied', 'skip_on_not_implemented',
-    'retry_before_failing', 'run_test_module_by_name', 'get_suite',
-    'run_suite',
+    'retry_on_failure',
     # install utils
     'install_pip', 'install_test_deps',
     # fs utils
@@ -93,7 +95,7 @@ __all__ = [
     # sync primitives
     'call_until', 'wait_for_pid', 'wait_for_file',
     # network
-    'check_connection_ntuple', 'check_net_address',
+    'check_net_address',
     'get_free_port', 'unix_socket_path', 'bind_socket', 'bind_unix_socket',
     'tcp_socketpair', 'unix_socketpair', 'create_sockets',
     # compat
@@ -111,23 +113,20 @@ __all__ = [
 
 TOX = os.getenv('TOX') or '' in ('1', 'true')
 PYPY = '__pypy__' in sys.builtin_module_names
-WIN_VISTA = (6, 0, 0) if WINDOWS else None
-# whether we're running this test suite on Travis (https://travis-ci.org/)
+# whether we're running this test suite on a Continuous Integration service
 TRAVIS = bool(os.environ.get('TRAVIS'))
-# whether we're running this test suite on Appveyor for Windows
-# (http://www.appveyor.com/)
 APPVEYOR = bool(os.environ.get('APPVEYOR'))
+CIRRUS = bool(os.environ.get('CIRRUS'))
+CI_TESTING = TRAVIS or APPVEYOR or CIRRUS
 
 # --- configurable defaults
 
-# how many times retry_before_failing() decorator will retry
+# how many times retry_on_failure() decorator will retry
 NO_RETRIES = 10
 # bytes tolerance for system-wide memory related tests
 MEMORY_TOLERANCE = 500 * 1024  # 500KB
 # the timeout used in functions which have to wait
-GLOBAL_TIMEOUT = 3 if TRAVIS or APPVEYOR else 0.5
-# test output verbosity
-VERBOSITY = 1 if os.getenv('SILENT') or TOX else 2
+GLOBAL_TIMEOUT = 5
 # be more tolerant if we're on travis / appveyor in order to avoid
 # false positives
 if TRAVIS or APPVEYOR:
@@ -153,27 +152,33 @@ ASCII_FS = sys.getfilesystemencoding().lower() in ('ascii', 'us-ascii')
 
 # --- paths
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+ROOT_DIR = os.path.realpath(
+    os.path.join(os.path.dirname(__file__), '..', '..'))
 SCRIPTS_DIR = os.path.join(ROOT_DIR, 'scripts')
-HERE = os.path.abspath(os.path.dirname(__file__))
+HERE = os.path.realpath(os.path.dirname(__file__))
 
 # --- support
 
+HAS_CONNECTIONS_UNIX = POSIX and not SUNOS
 HAS_CPU_AFFINITY = hasattr(psutil.Process, "cpu_affinity")
 HAS_CPU_FREQ = hasattr(psutil, "cpu_freq")
-HAS_CONNECTIONS_UNIX = POSIX and not SUNOS
+HAS_GETLOADAVG = hasattr(psutil, "getloadavg")
 HAS_ENVIRON = hasattr(psutil.Process, "environ")
-HAS_PROC_IO_COUNTERS = hasattr(psutil.Process, "io_counters")
 HAS_IONICE = hasattr(psutil.Process, "ionice")
-HAS_MEMORY_FULL_INFO = 'uss' in psutil.Process().memory_full_info()._fields
 HAS_MEMORY_MAPS = hasattr(psutil.Process, "memory_maps")
+HAS_NET_IO_COUNTERS = hasattr(psutil, "net_io_counters")
 HAS_PROC_CPU_NUM = hasattr(psutil.Process, "cpu_num")
+HAS_PROC_IO_COUNTERS = hasattr(psutil.Process, "io_counters")
 HAS_RLIMIT = hasattr(psutil.Process, "rlimit")
-HAS_THREADS = hasattr(psutil.Process, "threads")
 HAS_SENSORS_BATTERY = hasattr(psutil, "sensors_battery")
-HAS_BATTERY = HAS_SENSORS_BATTERY and bool(psutil.sensors_battery())
+try:
+    HAS_BATTERY = HAS_SENSORS_BATTERY and bool(psutil.sensors_battery())
+except Exception:
+    HAS_BATTERY = True
 HAS_SENSORS_FANS = hasattr(psutil, "sensors_fans")
 HAS_SENSORS_TEMPERATURES = hasattr(psutil, "sensors_temperatures")
+HAS_THREADS = hasattr(psutil.Process, "threads")
+SKIP_SYSCONS = (MACOS or AIX) and os.getuid() != 0
 
 # --- misc
 
@@ -208,20 +213,14 @@ DEVNULL = open(os.devnull, 'r+')
 VALID_PROC_STATUSES = [getattr(psutil, x) for x in dir(psutil)
                        if x.startswith('STATUS_')]
 AF_UNIX = getattr(socket, "AF_UNIX", object())
-SOCK_SEQPACKET = getattr(socket, "SOCK_SEQPACKET", object())
 
 _subprocesses_started = set()
 _pids_started = set()
 _testfiles_created = set()
 
 
-def logstderr(s):
-    print(s, file=sys.stderr)
-
-
 @atexit.register
 def cleanup_test_files():
-    logstderr("executing cleanup_test_files() atexit function")
     DEVNULL.close()
     for name in os.listdir(u('.')):
         if isinstance(name, unicode):
@@ -229,13 +228,11 @@ def cleanup_test_files():
         else:
             prefix = TESTFILE_PREFIX
         if name.startswith(prefix):
-            logstderr("removing temporary test file %r" % name)
             try:
                 safe_rmpath(name)
             except Exception:
                 traceback.print_exc()
     for path in _testfiles_created:
-        logstderr("removing temporary test file %r" % path)
         try:
             safe_rmpath(path)
         except Exception:
@@ -245,7 +242,6 @@ def cleanup_test_files():
 # this is executed first
 @atexit.register
 def cleanup_test_procs():
-    logstderr("executing cleanup_test_procs() atexit function")
     reap_children(recursive=True)
 
 
@@ -328,8 +324,11 @@ def get_test_subprocess(cmd=None, **kwds):
     kwds.setdefault("cwd", os.getcwd())
     kwds.setdefault("env", os.environ)
     if WINDOWS:
-        # Prevents the subprocess to open error dialogs.
-        kwds.setdefault("creationflags", 0x8000000)  # CREATE_NO_WINDOW
+        # Prevents the subprocess to open error dialogs. This will also
+        # cause stderr to be suppressed, which is suboptimal in order
+        # to debug broken tests.
+        CREATE_NO_WINDOW = 0x8000000
+        kwds.setdefault("creationflags", CREATE_NO_WINDOW)
     if cmd is None:
         safe_rmpath(_TESTFN)
         pyline = "from time import sleep;" \
@@ -362,8 +361,8 @@ def create_proc_children_pair():
         s += "f.write(str(os.getpid()));"
         s += "f.close();"
         s += "time.sleep(60);"
-        subprocess.Popen(['%s', '-c', s])
-        time.sleep(60)
+        p = subprocess.Popen([r'%s', '-c', s])
+        p.wait()
         """ % (_TESTFN2, PYTHON_EXE))
     # On Windows if we create a subprocess with CREATE_NO_WINDOW flag
     # set (which is the default) a "conhost.exe" extra process will be
@@ -404,7 +403,7 @@ def create_zombie_proc():
     with contextlib.closing(socket.socket(socket.AF_UNIX)) as sock:
         sock.settimeout(GLOBAL_TIMEOUT)
         sock.bind(unix_file)
-        sock.listen(1)
+        sock.listen(5)
         pyrun(src)
         conn, _ = sock.accept()
         try:
@@ -450,7 +449,10 @@ def sh(cmd, **kwds):
     kwds.setdefault("creationflags", flags)
     p = subprocess.Popen(cmd, **kwds)
     _subprocesses_started.add(p)
-    stdout, stderr = p.communicate()
+    if PY3:
+        stdout, stderr = p.communicate(timeout=GLOBAL_TIMEOUT)
+    else:
+        stdout, stderr = p.communicate()
     if p.returncode != 0:
         raise RuntimeError(stderr)
     if stderr:
@@ -499,7 +501,7 @@ def reap_children(recursive=False):
         try:
             subp.terminate()
         except OSError as err:
-            if WINDOWS and err.errno == 6:  # "invalid handle"
+            if WINDOWS and err.winerror == 6:  # "invalid handle"
                 pass
             elif err.errno != errno.ESRCH:
                 raise
@@ -515,9 +517,8 @@ def reap_children(recursive=False):
             # Wait for the process to terminate, to avoid zombies.
             try:
                 subp.wait()
-            except OSError as err:
-                if err.errno != errno.ECHILD:
-                    raise
+            except ChildProcessError:
+                pass
 
     # Terminate started pids.
     while _pids_started:
@@ -609,7 +610,7 @@ class retry(object):
                  timeout=None,
                  retries=None,
                  interval=0.001,
-                 logfun=lambda s: print(s, file=sys.stderr),
+                 logfun=None,
                  ):
         if timeout and retries:
             raise ValueError("timeout and retries args are mutually exclusive")
@@ -642,7 +643,7 @@ class retry(object):
             for _ in self:
                 try:
                     return fun(*args, **kwargs)
-                except self.exception as _:
+                except self.exception as _:  # NOQA
                     exc = _
                     if self.logfun is not None:
                         self.logfun(exc)
@@ -711,13 +712,12 @@ def safe_rmpath(path):
         while time.time() < stop_at:
             try:
                 return fun()
+            except FileNotFoundError:
+                pass
             except WindowsError as _:
                 err = _
-                if err.errno != errno.ENOENT:
-                    raise
-                else:
-                    warn("ignoring %s" % (str(err)))
-                    time.sleep(0.01)
+                warn("ignoring %s" % (str(err)))
+            time.sleep(0.01)
         raise err
 
     try:
@@ -730,18 +730,16 @@ def safe_rmpath(path):
             fun()
         else:
             retry_fun(fun)
-    except OSError as err:
-        if err.errno != errno.ENOENT:
-            raise
+    except FileNotFoundError:
+        pass
 
 
 def safe_mkdir(dir):
     "Convenience function for creating a directory"
     try:
         os.mkdir(dir)
-    except OSError as err:
-        if err.errno != errno.EEXIST:
-            raise
+    except FileExistsError:
+        pass
 
 
 @contextlib.contextmanager
@@ -800,9 +798,11 @@ class TestCase(unittest.TestCase):
     # Print a full path representation of the single unit tests
     # being run.
     def __str__(self):
+        fqmod = self.__class__.__module__
+        if not fqmod.startswith('psutil.'):
+            fqmod = 'psutil.tests.' + fqmod
         return "%s.%s.%s" % (
-            self.__class__.__module__, self.__class__.__name__,
-            self._testMethodName)
+            fqmod, self.__class__.__name__, self._testMethodName)
 
     # assertRaisesRegexp renamed to assertRaisesRegex in 3.3;
     # add support for the new name.
@@ -814,52 +814,15 @@ class TestCase(unittest.TestCase):
 unittest.TestCase = TestCase
 
 
-def _setup_tests():
-    if 'PSUTIL_TESTING' not in os.environ:
-        # This won't work on Windows but set_testing() below will do it.
-        os.environ['PSUTIL_TESTING'] = '1'
-    psutil._psplatform.cext.set_testing()
-
-
-def get_suite():
-    testmods = [os.path.splitext(x)[0] for x in os.listdir(HERE)
-                if x.endswith('.py') and x.startswith('test_') and not
-                x.startswith('test_memory_leaks')]
-    if "WHEELHOUSE_UPLOADER_USERNAME" in os.environ:
-        testmods = [x for x in testmods if not x.endswith((
-                    "osx", "posix", "linux"))]
-    suite = unittest.TestSuite()
-    for tm in testmods:
-        # ...so that the full test paths are printed on screen
-        tm = "psutil.tests.%s" % tm
-        suite.addTest(unittest.defaultTestLoader.loadTestsFromName(tm))
-    return suite
-
-
-def run_suite():
-    _setup_tests()
-    result = unittest.TextTestRunner(verbosity=VERBOSITY).run(get_suite())
-    success = result.wasSuccessful()
-    sys.exit(0 if success else 1)
-
-
-def run_test_module_by_name(name):
-    # testmodules = [os.path.splitext(x)[0] for x in os.listdir(HERE)
-    #                if x.endswith('.py') and x.startswith('test_')]
-    _setup_tests()
-    name = os.path.splitext(os.path.basename(name))[0]
-    suite = unittest.TestSuite()
-    suite.addTest(unittest.defaultTestLoader.loadTestsFromName(name))
-    result = unittest.TextTestRunner(verbosity=VERBOSITY).run(suite)
-    success = result.wasSuccessful()
-    sys.exit(0 if success else 1)
-
-
-def retry_before_failing(retries=NO_RETRIES):
+def retry_on_failure(retries=NO_RETRIES):
     """Decorator which runs a test function and retries N times before
     actually failing.
     """
-    return retry(exception=AssertionError, timeout=None, retries=retries)
+    def logfun(exc):
+        print("%r, retrying" % exc, file=sys.stderr)
+
+    return retry(exception=AssertionError, timeout=None, retries=retries,
+                 logfun=logfun)
 
 
 def skip_on_access_denied(only_if=None):
@@ -904,7 +867,6 @@ def skip_on_not_implemented(only_if=None):
 def get_free_port(host='127.0.0.1'):
     """Return an unused TCP port."""
     with contextlib.closing(socket.socket()) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, 0))
         return sock.getsockname()[1]
 
@@ -931,10 +893,11 @@ def bind_socket(family=AF_INET, type=SOCK_STREAM, addr=None):
         addr = ("", 0)
     sock = socket.socket(family, type)
     try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name not in ('nt', 'cygwin'):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(addr)
         if type == socket.SOCK_STREAM:
-            sock.listen(10)
+            sock.listen(5)
         return sock
     except Exception:
         sock.close()
@@ -949,7 +912,7 @@ def bind_unix_socket(name, type=socket.SOCK_STREAM):
     try:
         sock.bind(name)
         if type == socket.SOCK_STREAM:
-            sock.listen(10)
+            sock.listen(5)
     except Exception:
         sock.close()
         raise
@@ -962,7 +925,7 @@ def tcp_socketpair(family, addr=("", 0)):
     """
     with contextlib.closing(socket.socket(family, SOCK_STREAM)) as ll:
         ll.bind(addr)
-        ll.listen(10)
+        ll.listen(5)
         addr = ll.getsockname()
         c = socket.socket(family, SOCK_STREAM)
         try:
@@ -1058,77 +1021,6 @@ def check_net_address(addr, family):
         raise ValueError("unknown family %r", family)
 
 
-def check_connection_ntuple(conn):
-    """Check validity of a connection namedtuple."""
-    # check ntuple
-    assert len(conn) in (6, 7), conn
-    has_pid = len(conn) == 7
-    has_fd = getattr(conn, 'fd', -1) != -1
-    assert conn[0] == conn.fd
-    assert conn[1] == conn.family
-    assert conn[2] == conn.type
-    assert conn[3] == conn.laddr
-    assert conn[4] == conn.raddr
-    assert conn[5] == conn.status
-    if has_pid:
-        assert conn[6] == conn.pid
-
-    # check fd
-    if has_fd:
-        assert conn.fd >= 0, conn
-        if hasattr(socket, 'fromfd') and not WINDOWS:
-            try:
-                dupsock = socket.fromfd(conn.fd, conn.family, conn.type)
-            except (socket.error, OSError) as err:
-                if err.args[0] != errno.EBADF:
-                    raise
-            else:
-                with contextlib.closing(dupsock):
-                    assert dupsock.family == conn.family
-                    assert dupsock.type == conn.type
-
-    # check family
-    assert conn.family in (AF_INET, AF_INET6, AF_UNIX), repr(conn.family)
-    if conn.family in (AF_INET, AF_INET6):
-        # actually try to bind the local socket; ignore IPv6
-        # sockets as their address might be represented as
-        # an IPv4-mapped-address (e.g. "::127.0.0.1")
-        # and that's rejected by bind()
-        if conn.family == AF_INET:
-            s = socket.socket(conn.family, conn.type)
-            with contextlib.closing(s):
-                try:
-                    s.bind((conn.laddr[0], 0))
-                except socket.error as err:
-                    if err.errno != errno.EADDRNOTAVAIL:
-                        raise
-    elif conn.family == AF_UNIX:
-        assert conn.status == psutil.CONN_NONE, conn.status
-
-    # check type (SOCK_SEQPACKET may happen in case of AF_UNIX socks)
-    assert conn.type in (SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET), \
-        repr(conn.type)
-    if conn.type == SOCK_DGRAM:
-        assert conn.status == psutil.CONN_NONE, conn.status
-
-    # check laddr (IP address and port sanity)
-    for addr in (conn.laddr, conn.raddr):
-        if conn.family in (AF_INET, AF_INET6):
-            assert isinstance(addr, tuple), addr
-            if not addr:
-                continue
-            assert isinstance(addr.port, int), addr.port
-            assert 0 <= addr.port <= 65535, addr.port
-            check_net_address(addr.ip, conn.family)
-        elif conn.family == AF_UNIX:
-            assert isinstance(addr, str), addr
-
-    # check status
-    assert isinstance(conn.status, str), conn
-    valids = [getattr(psutil, x) for x in dir(psutil) if x.startswith('CONN_')]
-    assert conn.status in valids, conn
-
-
 # ===================================================================
 # --- compatibility
 # ===================================================================
@@ -1192,11 +1084,12 @@ if POSIX:
         by this process, copies it in another location and loads it
         in memory via ctypes. Return the new absolutized path.
         """
+        exe = 'pypy' if PYPY else 'python'
         ext = ".so"
         dst = tempfile.mktemp(prefix=dst_prefix, suffix=ext)
         libs = [x.path for x in psutil.Process().memory_maps() if
                 os.path.splitext(x.path)[1] == ext and
-                'python' in x.path.lower()]
+                exe in x.path.lower()]
         src = random.choice(libs)
         shutil.copyfile(src, dst)
         try:
@@ -1217,9 +1110,12 @@ else:
         ext = ".dll"
         dst = tempfile.mktemp(prefix=dst_prefix, suffix=ext)
         libs = [x.path for x in psutil.Process().memory_maps() if
-                os.path.splitext(x.path)[1].lower() == ext and
+                x.path.lower().endswith(ext) and
                 'python' in os.path.basename(x.path).lower() and
                 'wow64' not in x.path.lower()]
+        if PYPY and not libs:
+            libs = [x.path for x in psutil.Process().memory_maps() if
+                    'pypy' in os.path.basename(x.path).lower()]
         src = random.choice(libs)
         shutil.copyfile(src, dst)
         cfile = None

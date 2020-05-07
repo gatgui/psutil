@@ -74,20 +74,6 @@ psutil_sys_vminfo(vm_statistics_data_t *vmstat) {
 
 
 /*
- * Return 1 if pid refers to a zombie process else 0.
- */
-int
-psutil_is_zombie(long pid)
-{
-    struct kinfo_proc kp;
-
-    if (psutil_get_kinfo_proc(pid, &kp) == -1)
-        return 0;
-    return (kp.kp_proc.p_stat == SZOMB) ? 1 : 0;
-}
-
-
-/*
  * A wrapper around task_for_pid() which sucks big time:
  * - it's not documented
  * - errno is set only sometimes
@@ -102,15 +88,15 @@ psutil_is_zombie(long pid)
  * https://github.com/giampaolo/psutil/issues/1291#issuecomment-396062519
  */
 int
-psutil_task_for_pid(long pid, mach_port_t *task)
+psutil_task_for_pid(pid_t pid, mach_port_t *task)
 {
     // See: https://github.com/giampaolo/psutil/issues/1181
     kern_return_t err = KERN_SUCCESS;
 
-    err = task_for_pid(mach_task_self(), (pid_t)pid, task);
+    err = task_for_pid(mach_task_self(), pid, task);
     if (err != KERN_SUCCESS) {
         if (psutil_pid_exists(pid) == 0)
-            NoSuchProcess("task_for_pid() failed");
+            NoSuchProcess("task_for_pid");
         else if (psutil_is_zombie(pid) == 1)
             PyErr_SetString(ZombieProcessError, "task_for_pid() failed");
         else {
@@ -118,7 +104,7 @@ psutil_task_for_pid(long pid, mach_port_t *task)
                 "task_for_pid() failed (pid=%ld, err=%i, errno=%i, msg='%s'); "
                 "setting AccessDenied()",
                 pid, err, errno, mach_error_string(err));
-            AccessDenied("task_for_pid() failed");
+            AccessDenied("task_for_pid");
         }
         return 1;
     }
@@ -141,31 +127,22 @@ psutil_pids(PyObject *self, PyObject *args) {
     if (py_retlist == NULL)
         return NULL;
 
-    if (psutil_get_proc_list(&proclist, &num_processes) != 0) {
-        if (errno != 0) {
-            PyErr_SetFromErrno(PyExc_OSError);
-        }
-        else {
-            PyErr_SetString(PyExc_RuntimeError,
-                            "failed to retrieve process list");
-        }
+    if (psutil_get_proc_list(&proclist, &num_processes) != 0)
         goto error;
-    }
 
-    if (num_processes > 0) {
-        // save the address of proclist so we can free it later
-        orig_address = proclist;
-        for (idx = 0; idx < num_processes; idx++) {
-            py_pid = Py_BuildValue("i", proclist->kp_proc.p_pid);
-            if (! py_pid)
-                goto error;
-            if (PyList_Append(py_retlist, py_pid))
-                goto error;
-            Py_DECREF(py_pid);
-            proclist++;
-        }
-        free(orig_address);
+    // save the address of proclist so we can free it later
+    orig_address = proclist;
+    for (idx = 0; idx < num_processes; idx++) {
+        py_pid = PyLong_FromPid(proclist->kp_proc.p_pid);
+        if (! py_pid)
+            goto error;
+        if (PyList_Append(py_retlist, py_pid))
+            goto error;
+        Py_CLEAR(py_pid);
+        proclist++;
     }
+    free(orig_address);
+
     return py_retlist;
 
 error:
@@ -187,12 +164,12 @@ error:
  */
 static PyObject *
 psutil_proc_kinfo_oneshot(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     struct kinfo_proc kp;
     PyObject *py_name;
     PyObject *py_retlist;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
     if (psutil_get_kinfo_proc(pid, &kp) == -1)
         return NULL;
@@ -206,8 +183,8 @@ psutil_proc_kinfo_oneshot(PyObject *self, PyObject *args) {
     }
 
     py_retlist = Py_BuildValue(
-        "lllllllidiO",
-        (long)kp.kp_eproc.e_ppid,                  // (long) ppid
+        _Py_PARSE_PID "llllllidiO",
+        kp.kp_eproc.e_ppid,                        // (pid_t) ppid
         (long)kp.kp_eproc.e_pcred.p_ruid,          // (long) real uid
         (long)kp.kp_eproc.e_ucred.cr_uid,          // (long) effective uid
         (long)kp.kp_eproc.e_pcred.p_svuid,         // (long) saved uid
@@ -238,10 +215,10 @@ psutil_proc_kinfo_oneshot(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_pidtaskinfo_oneshot(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     struct proc_taskinfo pti;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
     if (psutil_proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &pti, sizeof(pti)) <= 0)
         return NULL;
@@ -273,10 +250,10 @@ psutil_proc_pidtaskinfo_oneshot(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_name(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     struct kinfo_proc kp;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
     if (psutil_get_kinfo_proc(pid, &kp) == -1)
         return NULL;
@@ -290,10 +267,10 @@ psutil_proc_name(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_cwd(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     struct proc_vnodepathinfo pathinfo;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
 
     if (psutil_proc_pidinfo(
@@ -311,17 +288,17 @@ psutil_proc_cwd(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_exe(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     char buf[PATH_MAX];
     int ret;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
     errno = 0;
-    ret = proc_pidpath((pid_t)pid, &buf, sizeof(buf));
+    ret = proc_pidpath(pid, &buf, sizeof(buf));
     if (ret == 0) {
         if (pid == 0)
-            AccessDenied("");
+            AccessDenied("automatically set for PID 0");
         else
             psutil_raise_for_pid(pid, "proc_pidpath()");
         return NULL;
@@ -335,10 +312,10 @@ psutil_proc_exe(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_cmdline(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     PyObject *py_retlist = NULL;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
 
     // get the commandline, defined in arch/osx/process_info.c
@@ -352,172 +329,15 @@ psutil_proc_cmdline(PyObject *self, PyObject *args) {
  */
 static PyObject *
 psutil_proc_environ(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     PyObject *py_retdict = NULL;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
 
     // get the environment block, defined in arch/osx/process_info.c
     py_retdict = psutil_get_environ(pid);
     return py_retdict;
-}
-
-
-/*
- * Return a list of tuples for every process memory maps.
- * 'procstat' cmdline utility has been used as an example.
- */
-static PyObject *
-psutil_proc_memory_maps(PyObject *self, PyObject *args) {
-    char buf[PATH_MAX];
-    char addr_str[34];
-    char perms[8];
-    int pagesize = getpagesize();
-    long pid;
-    kern_return_t err = KERN_SUCCESS;
-    mach_port_t task = MACH_PORT_NULL;
-    uint32_t depth = 1;
-    vm_address_t address = 0;
-    vm_size_t size = 0;
-
-    PyObject *py_tuple = NULL;
-    PyObject *py_path = NULL;
-    PyObject *py_list = PyList_New(0);
-
-    if (py_list == NULL)
-        return NULL;
-
-    if (! PyArg_ParseTuple(args, "l", &pid))
-        goto error;
-
-    if (psutil_task_for_pid(pid, &task) != 0)
-        goto error;
-
-    while (1) {
-        py_tuple = NULL;
-        struct vm_region_submap_info_64 info;
-        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-
-        err = vm_region_recurse_64(task, &address, &size, &depth,
-                                   (vm_region_info_64_t)&info, &count);
-        if (err == KERN_INVALID_ADDRESS) {
-            // TODO temporary
-            psutil_debug("vm_region_recurse_64 returned KERN_INVALID_ADDRESS");
-            break;
-        }
-        if (err != KERN_SUCCESS) {
-            psutil_debug("vm_region_recurse_64 returned !=  KERN_SUCCESS");
-        }
-
-        if (info.is_submap) {
-            depth++;
-        }
-        else {
-            // Free/Reset the char[]s to avoid weird paths
-            memset(buf, 0, sizeof(buf));
-            memset(addr_str, 0, sizeof(addr_str));
-            memset(perms, 0, sizeof(perms));
-
-            sprintf(addr_str,
-                    "%016lx-%016lx",
-                    (long unsigned int)address,
-                    (long unsigned int)address + size);
-            sprintf(perms, "%c%c%c/%c%c%c",
-                    (info.protection & VM_PROT_READ) ? 'r' : '-',
-                    (info.protection & VM_PROT_WRITE) ? 'w' : '-',
-                    (info.protection & VM_PROT_EXECUTE) ? 'x' : '-',
-                    (info.max_protection & VM_PROT_READ) ? 'r' : '-',
-                    (info.max_protection & VM_PROT_WRITE) ? 'w' : '-',
-                    (info.max_protection & VM_PROT_EXECUTE) ? 'x' : '-');
-
-            // proc_regionfilename() return value seems meaningless
-            // so we do what we can in order to not continue in case
-            // of error.
-            errno = 0;
-            proc_regionfilename((pid_t)pid, address, buf, sizeof(buf));
-            if ((errno != 0) || ((sizeof(buf)) <= 0)) {
-                // TODO temporary
-                psutil_debug("proc_regionfilename() failed");
-                psutil_raise_for_pid(pid, "proc_regionfilename()");
-                goto error;
-            }
-
-            if (info.share_mode == SM_COW && info.ref_count == 1) {
-                // Treat single reference SM_COW as SM_PRIVATE
-                info.share_mode = SM_PRIVATE;
-            }
-
-            if (strlen(buf) == 0) {
-                switch (info.share_mode) {
-// #ifdef SM_LARGE_PAGE
-                    // case SM_LARGE_PAGE:
-                        // Treat SM_LARGE_PAGE the same as SM_PRIVATE
-                        // since they are not shareable and are wired.
-// #endif
-                    case SM_COW:
-                        strcpy(buf, "[cow]");
-                        break;
-                    case SM_PRIVATE:
-                        strcpy(buf, "[prv]");
-                        break;
-                    case SM_EMPTY:
-                        strcpy(buf, "[nul]");
-                        break;
-                    case SM_SHARED:
-                    case SM_TRUESHARED:
-                        strcpy(buf, "[shm]");
-                        break;
-                    case SM_PRIVATE_ALIASED:
-                        strcpy(buf, "[ali]");
-                        break;
-                    case SM_SHARED_ALIASED:
-                        strcpy(buf, "[s/a]");
-                        break;
-                    default:
-                        strcpy(buf, "[???]");
-                }
-            }
-
-            py_path = PyUnicode_DecodeFSDefault(buf);
-            if (! py_path)
-                goto error;
-            py_tuple = Py_BuildValue(
-                "ssOIIIIIH",
-                addr_str,                                 // "start-end"address
-                perms,                                    // "rwx" permissions
-                py_path,                                  // path
-                info.pages_resident * pagesize,           // rss
-                info.pages_shared_now_private * pagesize, // private
-                info.pages_swapped_out * pagesize,        // swapped
-                info.pages_dirtied * pagesize,            // dirtied
-                info.ref_count,                           // ref count
-                info.shadow_depth                         // shadow depth
-            );
-            if (!py_tuple)
-                goto error;
-            if (PyList_Append(py_list, py_tuple))
-                goto error;
-            Py_DECREF(py_tuple);
-            Py_DECREF(py_path);
-        }
-
-        // increment address for the next map/file
-        address += size;
-    }
-
-    if (task != MACH_PORT_NULL)
-        mach_port_deallocate(mach_task_self(), task);
-
-    return py_list;
-
-error:
-    if (task != MACH_PORT_NULL)
-        mach_port_deallocate(mach_task_self(), task);
-    Py_XDECREF(py_tuple);
-    Py_XDECREF(py_path);
-    Py_DECREF(py_list);
-    return NULL;
 }
 
 
@@ -569,7 +389,7 @@ psutil_cpu_count_phys(PyObject *self, PyObject *args) {
  * Indicates if the given virtual address on the given architecture is in the
  * shared VM region.
  */
-bool
+static bool
 psutil_in_shared_region(mach_vm_address_t addr, cpu_type_t type) {
     mach_vm_address_t base;
     mach_vm_address_t size;
@@ -602,7 +422,7 @@ psutil_in_shared_region(mach_vm_address_t addr, cpu_type_t type) {
  */
 static PyObject *
 psutil_proc_memory_uss(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     size_t len;
     cpu_type_t cpu_type;
     size_t private_pages = 0;
@@ -615,15 +435,17 @@ psutil_proc_memory_uss(PyObject *self, PyObject *args) {
     vm_region_top_info_data_t info;
     mach_port_t object_name;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
 
     if (psutil_task_for_pid(pid, &task) != 0)
         return NULL;
 
     len = sizeof(cpu_type);
-    if (sysctlbyname("sysctl.proc_cputype", &cpu_type, &len, NULL, 0) != 0)
-        return PyErr_SetFromErrno(PyExc_OSError);
+    if (sysctlbyname("sysctl.proc_cputype", &cpu_type, &len, NULL, 0) != 0) {
+        return PyErr_SetFromOSErrnoWithSyscall(
+            "sysctlbyname('sysctl.proc_cputype')");
+    }
 
     // Roughly based on libtop_update_vm_regions in
     // http://www.opensource.apple.com/source/top/top-100.1.2/libtop.c
@@ -682,8 +504,8 @@ psutil_proc_memory_uss(PyObject *self, PyObject *args) {
 /*
  * Return system virtual memory stats.
  * See:
- * http://opensource.apple.com/source/system_cmds/system_cmds-498.2/
- *     vm_stat.tproj/vm_stat.c
+ * https://opensource.apple.com/source/system_cmds/system_cmds-790/
+ *     vm_stat.tproj/vm_stat.c.auto.html
  */
 static PyObject *
 psutil_virtual_mem(PyObject *self, PyObject *args) {
@@ -711,13 +533,13 @@ psutil_virtual_mem(PyObject *self, PyObject *args) {
         return NULL;
 
     return Py_BuildValue(
-        "KKKKK",
+        "KKKKKK",
         total,
-        (unsigned long long) vm.active_count * pagesize,
-        (unsigned long long) vm.inactive_count * pagesize,
-        (unsigned long long) vm.wire_count * pagesize,
-        // this is how vm_stat cmd does it
-        (unsigned long long) (vm.free_count - vm.speculative_count) * pagesize
+        (unsigned long long) vm.active_count * pagesize,  // active
+        (unsigned long long) vm.inactive_count * pagesize,  // inactive
+        (unsigned long long) vm.wire_count * pagesize,  // wired
+        (unsigned long long) vm.free_count * pagesize,  // free
+        (unsigned long long) vm.speculative_count * pagesize  // speculative
     );
 }
 
@@ -831,7 +653,7 @@ psutil_per_cpu_times(PyObject *self, PyObject *args) {
             goto error;
         if (PyList_Append(py_retlist, py_cputime))
             goto error;
-        Py_DECREF(py_cputime);
+        Py_CLEAR(py_cputime);
     }
 
     ret = vm_deallocate(mach_task_self(), (vm_address_t)info_array,
@@ -863,12 +685,18 @@ psutil_cpu_freq(PyObject *self, PyObject *args) {
     int64_t max;
     size_t size = sizeof(int64_t);
 
-    if (sysctlbyname("hw.cpufrequency", &curr, &size, NULL, 0))
-        return PyErr_SetFromErrno(PyExc_OSError);
-    if (sysctlbyname("hw.cpufrequency_min", &min, &size, NULL, 0))
-        return PyErr_SetFromErrno(PyExc_OSError);
-    if (sysctlbyname("hw.cpufrequency_max", &max, &size, NULL, 0))
-        return PyErr_SetFromErrno(PyExc_OSError);
+    if (sysctlbyname("hw.cpufrequency", &curr, &size, NULL, 0)) {
+        return PyErr_SetFromOSErrnoWithSyscall(
+            "sysctlbyname('hw.cpufrequency')");
+    }
+    if (sysctlbyname("hw.cpufrequency_min", &min, &size, NULL, 0)) {
+        return PyErr_SetFromOSErrnoWithSyscall(
+            "sysctlbyname('hw.cpufrequency_min')");
+    }
+    if (sysctlbyname("hw.cpufrequency_max", &max, &size, NULL, 0)) {
+        return PyErr_SetFromOSErrnoWithSyscall(
+            "sysctlbyname('hw.cpufrequency_max')");
+    }
 
     return Py_BuildValue(
         "KKK",
@@ -1013,9 +841,9 @@ psutil_disk_partitions(PyObject *self, PyObject *args) {
             goto error;
         if (PyList_Append(py_retlist, py_tuple))
             goto error;
-        Py_DECREF(py_dev);
-        Py_DECREF(py_mountp);
-        Py_DECREF(py_tuple);
+        Py_CLEAR(py_dev);
+        Py_CLEAR(py_mountp);
+        Py_CLEAR(py_tuple);
     }
 
     free(fs);
@@ -1037,7 +865,7 @@ error:
  */
 static PyObject *
 psutil_proc_threads(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     int err, ret;
     kern_return_t kr;
     unsigned int info_count = TASK_BASIC_INFO_COUNT;
@@ -1054,7 +882,7 @@ psutil_proc_threads(PyObject *self, PyObject *args) {
     if (py_retlist == NULL)
         return NULL;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         goto error;
 
     if (psutil_task_for_pid(pid, &task) != 0)
@@ -1066,7 +894,7 @@ psutil_proc_threads(PyObject *self, PyObject *args) {
     if (err != KERN_SUCCESS) {
         // errcode 4 is "invalid argument" (access denied)
         if (err == 4) {
-            AccessDenied("");
+            AccessDenied("task_info");
         }
         else {
             // otherwise throw a runtime error with appropriate error code
@@ -1083,7 +911,6 @@ psutil_proc_threads(PyObject *self, PyObject *args) {
     }
 
     for (j = 0; j < thread_count; j++) {
-        py_tuple = NULL;
         thread_info_count = THREAD_INFO_MAX;
         kr = thread_info(thread_list[j], THREAD_BASIC_INFO,
                          (thread_info_t)thinfo_basic, &thread_info_count);
@@ -1106,7 +933,7 @@ psutil_proc_threads(PyObject *self, PyObject *args) {
             goto error;
         if (PyList_Append(py_retlist, py_tuple))
             goto error;
-        Py_DECREF(py_tuple);
+        Py_CLEAR(py_tuple);
     }
 
     ret = vm_deallocate(task, (vm_address_t)thread_list,
@@ -1141,7 +968,7 @@ error:
  */
 static PyObject *
 psutil_proc_open_files(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     int pidinfo_result;
     int iterations;
     int i;
@@ -1158,7 +985,7 @@ psutil_proc_open_files(PyObject *self, PyObject *args) {
     if (py_retlist == NULL)
         return NULL;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         goto error;
 
     pidinfo_result = psutil_proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
@@ -1215,10 +1042,8 @@ psutil_proc_open_files(PyObject *self, PyObject *args) {
                 goto error;
             if (PyList_Append(py_retlist, py_tuple))
                 goto error;
-            Py_DECREF(py_tuple);
-            py_tuple = NULL;
-            Py_DECREF(py_path);
-            py_path = NULL;
+            Py_CLEAR(py_tuple);
+            Py_CLEAR(py_path);
             // --- /construct python list
         }
     }
@@ -1245,7 +1070,7 @@ error:
  */
 static PyObject *
 psutil_proc_connections(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     int pidinfo_result;
     int iterations;
     int i;
@@ -1265,8 +1090,10 @@ psutil_proc_connections(PyObject *self, PyObject *args) {
     if (py_retlist == NULL)
         return NULL;
 
-    if (! PyArg_ParseTuple(args, "lOO", &pid, &py_af_filter, &py_type_filter))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID "OO", &pid, &py_af_filter,
+                           &py_type_filter)) {
         goto error;
+    }
 
     if (!PySequence_Check(py_af_filter) || !PySequence_Check(py_type_filter)) {
         PyErr_SetString(PyExc_TypeError, "arg 2 or 3 is not a sequence");
@@ -1299,7 +1126,7 @@ psutil_proc_connections(PyObject *self, PyObject *args) {
 
         if (fdp_pointer->proc_fdtype == PROX_FDTYPE_SOCKET) {
             errno = 0;
-            nb = proc_pidfdinfo((pid_t)pid, fdp_pointer->proc_fd,
+            nb = proc_pidfdinfo(pid, fdp_pointer->proc_fd,
                                 PROC_PIDFDSOCKETINFO, &si, sizeof(si));
 
             // --- errors checking
@@ -1370,7 +1197,7 @@ psutil_proc_connections(PyObject *self, PyObject *args) {
 
                 // check for inet_ntop failures
                 if (errno != 0) {
-                    PyErr_SetFromErrno(PyExc_OSError);
+                    PyErr_SetFromOSErrnoWithSyscall("inet_ntop()");
                     goto error;
                 }
 
@@ -1398,7 +1225,7 @@ psutil_proc_connections(PyObject *self, PyObject *args) {
                     goto error;
                 if (PyList_Append(py_retlist, py_tuple))
                     goto error;
-                Py_DECREF(py_tuple);
+                Py_CLEAR(py_tuple);
             }
             else if (family == AF_UNIX) {
                 py_laddr = PyUnicode_DecodeFSDefault(
@@ -1420,9 +1247,9 @@ psutil_proc_connections(PyObject *self, PyObject *args) {
                     goto error;
                 if (PyList_Append(py_retlist, py_tuple))
                     goto error;
-                Py_DECREF(py_tuple);
-                Py_DECREF(py_laddr);
-                Py_DECREF(py_raddr);
+                Py_CLEAR(py_tuple);
+                Py_CLEAR(py_laddr);
+                Py_CLEAR(py_raddr);
             }
         }
     }
@@ -1447,22 +1274,22 @@ error:
  */
 static PyObject *
 psutil_proc_num_fds(PyObject *self, PyObject *args) {
-    long pid;
+    pid_t pid;
     int pidinfo_result;
     int num;
     struct proc_fdinfo *fds_pointer;
 
-    if (! PyArg_ParseTuple(args, "l", &pid))
+    if (! PyArg_ParseTuple(args, _Py_PARSE_PID, &pid))
         return NULL;
 
-    pidinfo_result = proc_pidinfo((pid_t)pid, PROC_PIDLISTFDS, 0, NULL, 0);
+    pidinfo_result = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
     if (pidinfo_result <= 0)
         return PyErr_SetFromErrno(PyExc_OSError);
 
     fds_pointer = malloc(pidinfo_result);
     if (fds_pointer == NULL)
         return PyErr_NoMemory();
-    pidinfo_result = proc_pidinfo((pid_t)pid, PROC_PIDLISTFDS, 0, fds_pointer,
+    pidinfo_result = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds_pointer,
                                   pidinfo_result);
     if (pidinfo_result <= 0) {
         free(fds_pointer);
@@ -1483,19 +1310,18 @@ psutil_net_io_counters(PyObject *self, PyObject *args) {
     char *buf = NULL, *lim, *next;
     struct if_msghdr *ifm;
     int mib[6];
-    size_t len;
-    PyObject *py_retdict = PyDict_New();
-    PyObject *py_ifc_info = NULL;
-
-    if (py_retdict == NULL)
-        return NULL;
-
     mib[0] = CTL_NET;          // networking subsystem
     mib[1] = PF_ROUTE;         // type of information
     mib[2] = 0;                // protocol (IPPROTO_xxx)
     mib[3] = 0;                // address family
     mib[4] = NET_RT_IFLIST2;   // operation
     mib[5] = 0;
+    size_t len;
+    PyObject *py_ifc_info = NULL;
+    PyObject *py_retdict = PyDict_New();
+
+    if (py_retdict == NULL)
+        return NULL;
 
     if (sysctl(mib, 6, NULL, &len, NULL, 0) < 0) {
         PyErr_SetFromErrno(PyExc_OSError);
@@ -1543,7 +1369,7 @@ psutil_net_io_counters(PyObject *self, PyObject *args) {
                 goto error;
             if (PyDict_SetItemString(py_retdict, ifc_name, py_ifc_info))
                 goto error;
-            Py_DECREF(py_ifc_info);
+            Py_CLEAR(py_ifc_info);
         }
         else {
             continue;
@@ -1573,8 +1399,8 @@ psutil_disk_io_counters(PyObject *self, PyObject *args) {
     io_registry_entry_t parent;
     io_registry_entry_t disk;
     io_iterator_t disk_list;
-    PyObject *py_retdict = PyDict_New();
     PyObject *py_disk_info = NULL;
+    PyObject *py_retdict = PyDict_New();
 
     if (py_retdict == NULL)
         return NULL;
@@ -1716,7 +1542,7 @@ psutil_disk_io_counters(PyObject *self, PyObject *args) {
                 goto error;
             if (PyDict_SetItemString(py_retdict, disk_name, py_disk_info))
                 goto error;
-            Py_DECREF(py_disk_info);
+            Py_CLEAR(py_disk_info);
 
             CFRelease(parent_dict);
             IOObjectRelease(parent);
@@ -1778,10 +1604,10 @@ psutil_users(PyObject *self, PyObject *args) {
             endutxent();
             goto error;
         }
-        Py_DECREF(py_username);
-        Py_DECREF(py_tty);
-        Py_DECREF(py_hostname);
-        Py_DECREF(py_tuple);
+        Py_CLEAR(py_username);
+        Py_CLEAR(py_tty);
+        Py_CLEAR(py_hostname);
+        Py_CLEAR(py_tuple);
     }
 
     endutxent();
@@ -1918,8 +1744,7 @@ error:
 /*
  * define the psutil C module methods and initialize the module.
  */
-static PyMethodDef
-PsutilMethods[] = {
+static PyMethodDef mod_methods[] = {
     // --- per-process functions
 
     {"proc_kinfo_oneshot", psutil_proc_kinfo_oneshot, METH_VARARGS,
@@ -1946,8 +1771,6 @@ PsutilMethods[] = {
      "Return the number of fds opened by process."},
     {"proc_connections", psutil_proc_connections, METH_VARARGS,
      "Get process TCP and UDP connections as a list of tuples"},
-    {"proc_memory_maps", psutil_proc_memory_maps, METH_VARARGS,
-     "Return a list of tuples for every process's memory map"},
 
     // --- system-related functions
 
@@ -1991,92 +1814,93 @@ PsutilMethods[] = {
 };
 
 
-struct module_state {
-    PyObject *error;
-};
-
 #if PY_MAJOR_VERSION >= 3
-#define GETSTATE(m) ((struct module_state*)PyModule_GetState(m))
-#else
-#define GETSTATE(m) (&_state)
-#endif
+    #define INITERR return NULL
 
-#if PY_MAJOR_VERSION >= 3
+    static struct PyModuleDef moduledef = {
+        PyModuleDef_HEAD_INIT,
+        "_psutil_osx",
+        NULL,
+        -1,
+        mod_methods,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+    };
 
-static int
-psutil_osx_traverse(PyObject *m, visitproc visit, void *arg) {
-    Py_VISIT(GETSTATE(m)->error);
-    return 0;
-}
+    PyObject *PyInit__psutil_osx(void)
+#else  /* PY_MAJOR_VERSION */
+    #define INITERR return
 
-static int
-psutil_osx_clear(PyObject *m) {
-    Py_CLEAR(GETSTATE(m)->error);
-    return 0;
-}
-
-
-static struct PyModuleDef moduledef = {
-    PyModuleDef_HEAD_INIT,
-    "psutil_osx",
-    NULL,
-    sizeof(struct module_state),
-    PsutilMethods,
-    NULL,
-    psutil_osx_traverse,
-    psutil_osx_clear,
-    NULL
-};
-
-#define INITERROR return NULL
-
-PyMODINIT_FUNC PyInit__psutil_osx(void)
-
-#else
-#define INITERROR return
-
-void
-init_psutil_osx(void)
-#endif
+    void init_psutil_osx(void)
+#endif  /* PY_MAJOR_VERSION */
 {
 #if PY_MAJOR_VERSION >= 3
-    PyObject *module = PyModule_Create(&moduledef);
+    PyObject *mod = PyModule_Create(&moduledef);
 #else
-    PyObject *module = Py_InitModule("_psutil_osx", PsutilMethods);
+    PyObject *mod = Py_InitModule("_psutil_osx", mod_methods);
 #endif
-    PyModule_AddIntConstant(module, "version", PSUTIL_VERSION);
+    if (mod == NULL)
+        INITERR;
+
+    if (psutil_setup() != 0)
+        INITERR;
+
+    if (PyModule_AddIntConstant(mod, "version", PSUTIL_VERSION))
+        INITERR;
     // process status constants, defined in:
     // http://fxr.watson.org/fxr/source/bsd/sys/proc.h?v=xnu-792.6.70#L149
-    PyModule_AddIntConstant(module, "SIDL", SIDL);
-    PyModule_AddIntConstant(module, "SRUN", SRUN);
-    PyModule_AddIntConstant(module, "SSLEEP", SSLEEP);
-    PyModule_AddIntConstant(module, "SSTOP", SSTOP);
-    PyModule_AddIntConstant(module, "SZOMB", SZOMB);
+    if (PyModule_AddIntConstant(mod, "SIDL", SIDL))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "SRUN", SRUN))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "SSLEEP", SSLEEP))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "SSTOP", SSTOP))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "SZOMB", SZOMB))
+        INITERR;
     // connection status constants
-    PyModule_AddIntConstant(module, "TCPS_CLOSED", TCPS_CLOSED);
-    PyModule_AddIntConstant(module, "TCPS_CLOSING", TCPS_CLOSING);
-    PyModule_AddIntConstant(module, "TCPS_CLOSE_WAIT", TCPS_CLOSE_WAIT);
-    PyModule_AddIntConstant(module, "TCPS_LISTEN", TCPS_LISTEN);
-    PyModule_AddIntConstant(module, "TCPS_ESTABLISHED", TCPS_ESTABLISHED);
-    PyModule_AddIntConstant(module, "TCPS_SYN_SENT", TCPS_SYN_SENT);
-    PyModule_AddIntConstant(module, "TCPS_SYN_RECEIVED", TCPS_SYN_RECEIVED);
-    PyModule_AddIntConstant(module, "TCPS_FIN_WAIT_1", TCPS_FIN_WAIT_1);
-    PyModule_AddIntConstant(module, "TCPS_FIN_WAIT_2", TCPS_FIN_WAIT_2);
-    PyModule_AddIntConstant(module, "TCPS_LAST_ACK", TCPS_LAST_ACK);
-    PyModule_AddIntConstant(module, "TCPS_TIME_WAIT", TCPS_TIME_WAIT);
-    PyModule_AddIntConstant(module, "PSUTIL_CONN_NONE", PSUTIL_CONN_NONE);
+    if (PyModule_AddIntConstant(mod, "TCPS_CLOSED", TCPS_CLOSED))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_CLOSING", TCPS_CLOSING))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_CLOSE_WAIT", TCPS_CLOSE_WAIT))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_LISTEN", TCPS_LISTEN))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_ESTABLISHED", TCPS_ESTABLISHED))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_SYN_SENT", TCPS_SYN_SENT))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_SYN_RECEIVED", TCPS_SYN_RECEIVED))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_FIN_WAIT_1", TCPS_FIN_WAIT_1))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_FIN_WAIT_2", TCPS_FIN_WAIT_2))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_LAST_ACK", TCPS_LAST_ACK))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "TCPS_TIME_WAIT", TCPS_TIME_WAIT))
+        INITERR;
+    if (PyModule_AddIntConstant(mod, "PSUTIL_CONN_NONE", PSUTIL_CONN_NONE))
+        INITERR;
 
     // Exception.
     ZombieProcessError = PyErr_NewException(
         "_psutil_osx.ZombieProcessError", NULL, NULL);
+    if (ZombieProcessError == NULL)
+        INITERR;
     Py_INCREF(ZombieProcessError);
-    PyModule_AddObject(module, "ZombieProcessError", ZombieProcessError);
+    if (PyModule_AddObject(mod, "ZombieProcessError", ZombieProcessError)) {
+        Py_DECREF(ZombieProcessError);
+        INITERR;
+    }
 
-    psutil_setup();
-
-    if (module == NULL)
-        INITERROR;
+    if (mod == NULL)
+        INITERR;
 #if PY_MAJOR_VERSION >= 3
-    return module;
+    return mod;
 #endif
 }

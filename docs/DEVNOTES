@@ -12,11 +12,18 @@ PLATFORMS
 - #82: Cygwin (PR at #998)
 - #276: GNU/Hurd
 - #693: Windows Nano
+- #1251: Windows bash
 - DragonFlyBSD
 - HP-UX
 
 FEATURES
 ========
+
+- set process name/title
+
+- #1115: users() idle time.
+
+- #1102: Process.is64bit().
 
 - #371: sensors_temperatures() at least for macOS.
 
@@ -61,8 +68,6 @@ FEATURES
 - (Windows) fall back on using WMIC for Process methods returning AccessDenied
 
 - #613: thread names.
-
-- #604: emulate os.getloadavg() on Windows
 
 - scripts/taskmgr-gui.py (using tk).
 
@@ -146,15 +151,29 @@ FEATURES
 
 - #550: number of threads per core.
 
+- cpu_percent() and cpu_times_percent() use global vars so are not thread safe.
+
 BUGFIXES
 ========
 
 - #600: windows / open_files(): support network file handles.
 
-REJECTED
-========
+REJECTED IDEAS
+==============
 
 - #550: threads per core
+- #1667: process_iter(new_only=True)
+
+INCONSISTENCIES
+===============
+
+- disk_partitions(all=False) should have been "perdisk=False" instead:
+  * disk_io_counters(perdisk=False)
+  * net_io_counters(pernic=False)
+  * cpu_times_percent(percpu=False)
+  * cpu_times(percpu=False)
+  * cpu_freq(percpu=False)
+- PROCFS_PATH should have been set_procfs_path()
 
 RESOURCES
 =========
@@ -164,3 +183,4 @@ RESOURCES
 - libstatgrab: http://www.i-scream.org/libstatgrab/
 - top: http://www.unixtop.org/
 - oshi: https://github.com/oshi/oshi
+- netdata: https://github.com/netdata/netdata

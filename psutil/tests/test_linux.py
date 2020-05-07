@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (c) 2009, Giampaolo Rodola'. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
@@ -25,11 +25,13 @@ import warnings
 import psutil
 from psutil import LINUX
 from psutil._compat import basestring
+from psutil._compat import FileNotFoundError
 from psutil._compat import PY3
 from psutil._compat import u
 from psutil.tests import call_until
 from psutil.tests import HAS_BATTERY
 from psutil.tests import HAS_CPU_FREQ
+from psutil.tests import HAS_GETLOADAVG
 from psutil.tests import HAS_RLIMIT
 from psutil.tests import MEMORY_TOLERANCE
 from psutil.tests import mock
@@ -37,8 +39,7 @@ from psutil.tests import PYPY
 from psutil.tests import pyrun
 from psutil.tests import reap_children
 from psutil.tests import reload_module
-from psutil.tests import retry_before_failing
-from psutil.tests import run_test_module_by_name
+from psutil.tests import retry_on_failure
 from psutil.tests import safe_rmpath
 from psutil.tests import sh
 from psutil.tests import skip_on_not_implemented
@@ -55,7 +56,7 @@ SIOCGIFCONF = 0x8912
 SIOCGIFHWADDR = 0x8927
 if LINUX:
     SECTOR_SIZE = 512
-
+EMPTY_TEMPERATURES = not glob.glob('/sys/class/hwmon/hwmon*')
 
 # =====================================================================
 # --- utils
@@ -97,7 +98,7 @@ def free_swap():
     """Parse 'free' cmd and return swap memory's s total, used and free
     values.
     """
-    out = sh('free -b')
+    out = sh('free -b', env={"LANG": "C.UTF-8"})
     lines = out.split('\n')
     for line in lines:
         if line.startswith('Swap'):
@@ -116,7 +117,7 @@ def free_physmem():
     # and 'cached' memory which may have different positions so we
     # do not return them.
     # https://github.com/giampaolo/psutil/issues/538#issuecomment-57059946
-    out = sh('free -b')
+    out = sh('free -b', env={"LANG": "C.UTF-8"})
     lines = out.split('\n')
     for line in lines:
         if line.startswith('Mem'):
@@ -130,7 +131,7 @@ def free_physmem():
 
 
 def vmstat(stat):
-    out = sh("vmstat -s")
+    out = sh("vmstat -s", env={"LANG": "C.UTF-8"})
     for line in out.split("\n"):
         line = line.strip()
         if stat in line:
@@ -205,7 +206,7 @@ class TestSystemVirtualMemory(unittest.TestCase):
     #     05d751c4f076a2f0118b914c5e51cfbb4762ad8e
     @unittest.skipIf(LINUX and get_free_version_info() < (3, 3, 12),
                      "old free version")
-    @retry_before_failing()
+    @retry_on_failure()
     def test_used(self):
         free = free_physmem()
         free_value = free.used
@@ -215,18 +216,14 @@ class TestSystemVirtualMemory(unittest.TestCase):
             msg='%s %s \n%s' % (free_value, psutil_value, free.output))
 
     @unittest.skipIf(TRAVIS, "unreliable on TRAVIS")
-    @retry_before_failing()
+    @retry_on_failure()
     def test_free(self):
-        # _, _, free_value, _ = free_physmem()
-        # psutil_value = psutil.virtual_memory().free
-        # self.assertAlmostEqual(
-        #     free_value, psutil_value, delta=MEMORY_TOLERANCE)
         vmstat_value = vmstat('free memory') * 1024
         psutil_value = psutil.virtual_memory().free
         self.assertAlmostEqual(
             vmstat_value, psutil_value, delta=MEMORY_TOLERANCE)
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_buffers(self):
         vmstat_value = vmstat('buffer memory') * 1024
         psutil_value = psutil.virtual_memory().buffers
@@ -235,7 +232,7 @@ class TestSystemVirtualMemory(unittest.TestCase):
 
     # https://travis-ci.org/giampaolo/psutil/jobs/226719664
     @unittest.skipIf(TRAVIS, "unreliable on TRAVIS")
-    @retry_before_failing()
+    @retry_on_failure()
     def test_active(self):
         vmstat_value = vmstat('active memory') * 1024
         psutil_value = psutil.virtual_memory().active
@@ -244,14 +241,14 @@ class TestSystemVirtualMemory(unittest.TestCase):
 
     # https://travis-ci.org/giampaolo/psutil/jobs/227242952
     @unittest.skipIf(TRAVIS, "unreliable on TRAVIS")
-    @retry_before_failing()
+    @retry_on_failure()
     def test_inactive(self):
         vmstat_value = vmstat('inactive memory') * 1024
         psutil_value = psutil.virtual_memory().inactive
         self.assertAlmostEqual(
             vmstat_value, psutil_value, delta=MEMORY_TOLERANCE)
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_shared(self):
         free = free_physmem()
         free_value = free.shared
@@ -262,7 +259,7 @@ class TestSystemVirtualMemory(unittest.TestCase):
             free_value, psutil_value, delta=MEMORY_TOLERANCE,
             msg='%s %s \n%s' % (free_value, psutil_value, free.output))
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_available(self):
         # "free" output format has changed at some point:
         # https://github.com/giampaolo/psutil/issues/538#issuecomment-147192098
@@ -316,9 +313,10 @@ class TestSystemVirtualMemory(unittest.TestCase):
                 self.assertEqual(ret.available, 0)
                 self.assertEqual(ret.slab, 0)
 
+    @retry_on_failure()
     def test_avail_old_percent(self):
         # Make sure that our calculation of avail mem for old kernels
-        # is off by max 10%.
+        # is off by max 15%.
         from psutil._pslinux import calculate_avail_vmem
         from psutil._pslinux import open_binary
 
@@ -332,7 +330,7 @@ class TestSystemVirtualMemory(unittest.TestCase):
         if b'MemAvailable:' in mems:
             b = mems[b'MemAvailable:']
             diff_percent = abs(a - b) / a * 100
-            self.assertLess(diff_percent, 10)
+            self.assertLess(diff_percent, 15)
 
     def test_avail_old_comes_from_kernel(self):
         # Make sure "MemAvailable:" coluimn is used instead of relying
@@ -513,14 +511,14 @@ class TestSystemSwapMemory(unittest.TestCase):
         return self.assertAlmostEqual(
             free_value, psutil_value, delta=MEMORY_TOLERANCE)
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_used(self):
         free_value = free_swap().used
         psutil_value = psutil.swap_memory().used
         return self.assertAlmostEqual(
             free_value, psutil_value, delta=MEMORY_TOLERANCE)
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_free(self):
         free_value = free_swap().free
         psutil_value = psutil.swap_memory().free
@@ -528,7 +526,7 @@ class TestSystemSwapMemory(unittest.TestCase):
             free_value, psutil_value, delta=MEMORY_TOLERANCE)
 
     def test_missing_sin_sout(self):
-        with mock.patch('psutil._pslinux.open', create=True) as m:
+        with mock.patch('psutil._common.open', create=True) as m:
             with warnings.catch_warnings(record=True) as ws:
                 warnings.simplefilter("always")
                 ret = psutil.swap_memory()
@@ -575,7 +573,7 @@ class TestSystemSwapMemory(unittest.TestCase):
         total *= unit_multiplier
         free *= unit_multiplier
         self.assertEqual(swap.total, total)
-        self.assertEqual(swap.free, free)
+        self.assertAlmostEqual(swap.free, free, delta=MEMORY_TOLERANCE)
 
     def test_emulate_meminfo_has_no_metrics(self):
         # Emulate a case where /proc/meminfo provides no swap metrics
@@ -592,10 +590,10 @@ class TestSystemSwapMemory(unittest.TestCase):
 
 
 @unittest.skipIf(not LINUX, "LINUX only")
-class TestSystemCPU(unittest.TestCase):
+class TestSystemCPUTimes(unittest.TestCase):
 
     @unittest.skipIf(TRAVIS, "unknown failure on travis")
-    def test_cpu_times(self):
+    def test_fields(self):
         fields = psutil.cpu_times()._fields
         kernel_ver = re.findall(r'\d+\.\d+\.\d+', os.uname()[2])[0]
         kernel_ver_info = tuple(map(int, kernel_ver.split('.')))
@@ -612,9 +610,13 @@ class TestSystemCPU(unittest.TestCase):
         else:
             self.assertNotIn('guest_nice', fields)
 
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemCPUCountLogical(unittest.TestCase):
+
     @unittest.skipIf(not os.path.exists("/sys/devices/system/cpu/online"),
                      "/sys/devices/system/cpu/online does not exist")
-    def test_cpu_count_logical_w_sysdev_cpu_online(self):
+    def test_against_sysdev_cpu_online(self):
         with open("/sys/devices/system/cpu/online") as f:
             value = f.read().strip()
         if "-" in str(value):
@@ -623,23 +625,23 @@ class TestSystemCPU(unittest.TestCase):
 
     @unittest.skipIf(not os.path.exists("/sys/devices/system/cpu"),
                      "/sys/devices/system/cpu does not exist")
-    def test_cpu_count_logical_w_sysdev_cpu_num(self):
+    def test_against_sysdev_cpu_num(self):
         ls = os.listdir("/sys/devices/system/cpu")
         count = len([x for x in ls if re.search(r"cpu\d+$", x) is not None])
         self.assertEqual(psutil.cpu_count(), count)
 
     @unittest.skipIf(not which("nproc"), "nproc utility not available")
-    def test_cpu_count_logical_w_nproc(self):
+    def test_against_nproc(self):
         num = int(sh("nproc --all"))
         self.assertEqual(psutil.cpu_count(logical=True), num)
 
     @unittest.skipIf(not which("lscpu"), "lscpu utility not available")
-    def test_cpu_count_logical_w_lscpu(self):
+    def test_against_lscpu(self):
         out = sh("lscpu -p")
         num = len([x for x in out.split('\n') if not x.startswith('#')])
         self.assertEqual(psutil.cpu_count(logical=True), num)
 
-    def test_cpu_count_logical_mocked(self):
+    def test_emulate_fallbacks(self):
         import psutil._pslinux
         original = psutil._pslinux.cpu_count_logical()
         # Here we want to mock os.sysconf("SC_NPROCESSORS_ONLN") in
@@ -651,7 +653,7 @@ class TestSystemCPU(unittest.TestCase):
 
             # Let's have open() return emtpy data and make sure None is
             # returned ('cause we mimick os.cpu_count()).
-            with mock.patch('psutil._pslinux.open', create=True) as m:
+            with mock.patch('psutil._common.open', create=True) as m:
                 self.assertIsNone(psutil._pslinux.cpu_count_logical())
                 self.assertEqual(m.call_count, 2)
                 # /proc/stat should be the last one
@@ -662,7 +664,7 @@ class TestSystemCPU(unittest.TestCase):
             with open('/proc/cpuinfo', 'rb') as f:
                 cpuinfo_data = f.read()
             fake_file = io.BytesIO(cpuinfo_data)
-            with mock.patch('psutil._pslinux.open',
+            with mock.patch('psutil._common.open',
                             return_value=fake_file, create=True) as m:
                 self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
 
@@ -672,46 +674,89 @@ class TestSystemCPU(unittest.TestCase):
                 self.assertEqual(psutil._pslinux.cpu_count_logical(), original)
                 m.called
 
-    def test_cpu_count_physical_mocked(self):
-        # Have open() return emtpy data and make sure None is returned
-        # ('cause we want to mimick os.cpu_count())
-        with mock.patch('psutil._pslinux.open', create=True) as m:
-            self.assertIsNone(psutil._pslinux.cpu_count_physical())
-            assert m.called
 
-    @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
-    def test_cpu_freq_no_result(self):
-        with mock.patch("psutil._pslinux.glob.glob", return_value=[]):
-            self.assertIsNone(psutil.cpu_freq())
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemCPUCountPhysical(unittest.TestCase):
+
+    @unittest.skipIf(not which("lscpu"), "lscpu utility not available")
+    def test_against_lscpu(self):
+        out = sh("lscpu -p")
+        core_ids = set()
+        for line in out.split('\n'):
+            if not line.startswith('#'):
+                fields = line.split(',')
+                core_ids.add(fields[1])
+        self.assertEqual(psutil.cpu_count(logical=False), len(core_ids))
+
+    def test_emulate_none(self):
+        with mock.patch('glob.glob', return_value=[]) as m1:
+            with mock.patch('psutil._common.open', create=True) as m2:
+                self.assertIsNone(psutil._pslinux.cpu_count_physical())
+        assert m1.called
+        assert m2.called
+
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemCPUFrequency(unittest.TestCase):
 
     @unittest.skipIf(TRAVIS, "fails on Travis")
     @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
-    def test_cpu_freq_use_second_file(self):
+    def test_emulate_use_second_file(self):
         # https://github.com/giampaolo/psutil/issues/981
-        def glob_mock(pattern):
-            if pattern.startswith("/sys/devices/system/cpu/cpufreq/policy"):
-                flags.append(None)
-                return []
+        def path_exists_mock(path):
+            if path.startswith("/sys/devices/system/cpu/cpufreq/policy"):
+                return False
             else:
-                flags.append(None)
-                return orig_glob(pattern)
+                return orig_exists(path)
 
-        flags = []
-        orig_glob = glob.glob
-        with mock.patch("psutil._pslinux.glob.glob", side_effect=glob_mock,
+        orig_exists = os.path.exists
+        with mock.patch("os.path.exists", side_effect=path_exists_mock,
                         create=True):
             assert psutil.cpu_freq()
-            self.assertEqual(len(flags), 2)
 
     @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
-    def test_cpu_freq_emulate_data(self):
+    def test_emulate_use_cpuinfo(self):
+        # Emulate a case where /sys/devices/system/cpu/cpufreq* does not
+        # exist and /proc/cpuinfo is used instead.
+        def path_exists_mock(path):
+            if path.startswith('/sys/devices/system/cpu/'):
+                return False
+            else:
+                if path == "/proc/cpuinfo":
+                    flags.append(None)
+                return os_path_exists(path)
+
+        flags = []
+        os_path_exists = os.path.exists
+        try:
+            with mock.patch("os.path.exists", side_effect=path_exists_mock):
+                reload_module(psutil._pslinux)
+                ret = psutil.cpu_freq()
+                assert ret
+                assert flags
+                self.assertEqual(ret.max, 0.0)
+                self.assertEqual(ret.min, 0.0)
+                for freq in psutil.cpu_freq(percpu=True):
+                    self.assertEqual(ret.max, 0.0)
+                    self.assertEqual(ret.min, 0.0)
+        finally:
+            reload_module(psutil._pslinux)
+            reload_module(psutil)
+
+    @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
+    def test_emulate_data(self):
         def open_mock(name, *args, **kwargs):
-            if name.endswith('/scaling_cur_freq'):
+            if (name.endswith('/scaling_cur_freq') and
+                    name.startswith("/sys/devices/system/cpu/cpufreq/policy")):
                 return io.BytesIO(b"500000")
-            elif name.endswith('/scaling_min_freq'):
+            elif (name.endswith('/scaling_min_freq') and
+                    name.startswith("/sys/devices/system/cpu/cpufreq/policy")):
                 return io.BytesIO(b"600000")
-            elif name.endswith('/scaling_max_freq'):
+            elif (name.endswith('/scaling_max_freq') and
+                    name.startswith("/sys/devices/system/cpu/cpufreq/policy")):
                 return io.BytesIO(b"700000")
+            elif name == '/proc/cpuinfo':
+                return io.BytesIO(b"cpu MHz		: 500")
             else:
                 return orig_open(name, *args, **kwargs)
 
@@ -719,81 +764,84 @@ class TestSystemCPU(unittest.TestCase):
         patch_point = 'builtins.open' if PY3 else '__builtin__.open'
         with mock.patch(patch_point, side_effect=open_mock):
             with mock.patch(
-                    'glob.glob',
-                    return_value=['/sys/devices/system/cpu/cpufreq/policy0']):
+                    'os.path.exists', return_value=True):
                 freq = psutil.cpu_freq()
                 self.assertEqual(freq.current, 500.0)
-                self.assertEqual(freq.min, 600.0)
-                self.assertEqual(freq.max, 700.0)
+                # when /proc/cpuinfo is used min and max frequencies are not
+                # available and are set to 0.
+                if freq.min != 0.0:
+                    self.assertEqual(freq.min, 600.0)
+                if freq.max != 0.0:
+                    self.assertEqual(freq.max, 700.0)
 
     @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
-    def test_cpu_freq_emulate_multi_cpu(self):
+    def test_emulate_multi_cpu(self):
         def open_mock(name, *args, **kwargs):
-            if name.endswith('/scaling_cur_freq'):
+            n = name
+            if (n.endswith('/scaling_cur_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy0")):
                 return io.BytesIO(b"100000")
-            elif name.endswith('/scaling_min_freq'):
+            elif (n.endswith('/scaling_min_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy0")):
                 return io.BytesIO(b"200000")
-            elif name.endswith('/scaling_max_freq'):
+            elif (n.endswith('/scaling_max_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy0")):
                 return io.BytesIO(b"300000")
+            elif (n.endswith('/scaling_cur_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy1")):
+                return io.BytesIO(b"400000")
+            elif (n.endswith('/scaling_min_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy1")):
+                return io.BytesIO(b"500000")
+            elif (n.endswith('/scaling_max_freq') and
+                    n.startswith("/sys/devices/system/cpu/cpufreq/policy1")):
+                return io.BytesIO(b"600000")
+            elif name == '/proc/cpuinfo':
+                return io.BytesIO(b"cpu MHz		: 100\n"
+                                  b"cpu MHz		: 400")
             else:
                 return orig_open(name, *args, **kwargs)
 
         orig_open = open
         patch_point = 'builtins.open' if PY3 else '__builtin__.open'
-        policies = ['/sys/devices/system/cpu/cpufreq/policy0',
-                    '/sys/devices/system/cpu/cpufreq/policy1',
-                    '/sys/devices/system/cpu/cpufreq/policy2']
         with mock.patch(patch_point, side_effect=open_mock):
-            with mock.patch('glob.glob', return_value=policies):
-                freq = psutil.cpu_freq()
-                self.assertEqual(freq.current, 100.0)
-                self.assertEqual(freq.min, 200.0)
-                self.assertEqual(freq.max, 300.0)
+            with mock.patch('os.path.exists', return_value=True):
+                with mock.patch('psutil._pslinux.cpu_count_logical',
+                                return_value=2):
+                    freq = psutil.cpu_freq(percpu=True)
+                    self.assertEqual(freq[0].current, 100.0)
+                    if freq[0].min != 0.0:
+                        self.assertEqual(freq[0].min, 200.0)
+                    if freq[0].max != 0.0:
+                        self.assertEqual(freq[0].max, 300.0)
+                    self.assertEqual(freq[1].current, 400.0)
+                    if freq[1].min != 0.0:
+                        self.assertEqual(freq[1].min, 500.0)
+                    if freq[1].max != 0.0:
+                        self.assertEqual(freq[1].max, 600.0)
 
     @unittest.skipIf(TRAVIS, "fails on Travis")
     @unittest.skipIf(not HAS_CPU_FREQ, "not supported")
-    def test_cpu_freq_no_scaling_cur_freq_file(self):
+    def test_emulate_no_scaling_cur_freq_file(self):
         # See: https://github.com/giampaolo/psutil/issues/1071
         def open_mock(name, *args, **kwargs):
             if name.endswith('/scaling_cur_freq'):
                 raise IOError(errno.ENOENT, "")
             elif name.endswith('/cpuinfo_cur_freq'):
                 return io.BytesIO(b"200000")
-            else:
-                return orig_open(name, *args, **kwargs)
-
-        orig_open = open
-        patch_point = 'builtins.open' if PY3 else '__builtin__.open'
-        policies = ['/sys/devices/system/cpu/cpufreq/policy0',
-                    '/sys/devices/system/cpu/cpufreq/policy1',
-                    '/sys/devices/system/cpu/cpufreq/policy2']
-
-        with mock.patch(patch_point, side_effect=open_mock):
-            with mock.patch('glob.glob', return_value=policies):
-                freq = psutil.cpu_freq()
-                self.assertEqual(freq.current, 200)
-
-        # Also test that NotImplementedError is raised in case no
-        # current freq file is present.
-
-        def open_mock(name, *args, **kwargs):
-            if name.endswith('/scaling_cur_freq'):
-                raise IOError(errno.ENOENT, "")
-            elif name.endswith('/cpuinfo_cur_freq'):
-                raise IOError(errno.ENOENT, "")
+            elif name == '/proc/cpuinfo':
+                return io.BytesIO(b"cpu MHz		: 200")
             else:
                 return orig_open(name, *args, **kwargs)
 
         orig_open = open
         patch_point = 'builtins.open' if PY3 else '__builtin__.open'
         with mock.patch(patch_point, side_effect=open_mock):
-            with mock.patch('glob.glob', return_value=policies):
-                self.assertRaises(NotImplementedError, psutil.cpu_freq)
-
-
-# =====================================================================
-# --- system CPU stats
-# =====================================================================
+            with mock.patch('os.path.exists', return_value=True):
+                with mock.patch('psutil._pslinux.cpu_count_logical',
+                                return_value=1):
+                    freq = psutil.cpu_freq()
+                    self.assertEqual(freq.current, 200)
 
 
 @unittest.skipIf(not LINUX, "LINUX only")
@@ -812,15 +860,29 @@ class TestSystemCPUStats(unittest.TestCase):
         self.assertAlmostEqual(vmstat_value, psutil_value, delta=500)
 
 
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestLoadAvg(unittest.TestCase):
+
+    @unittest.skipIf(not HAS_GETLOADAVG, "not supported")
+    def test_getloadavg(self):
+        psutil_value = psutil.getloadavg()
+        with open("/proc/loadavg", "r") as f:
+            proc_value = f.read().split()
+
+        self.assertAlmostEqual(float(proc_value[0]), psutil_value[0], delta=1)
+        self.assertAlmostEqual(float(proc_value[1]), psutil_value[1], delta=1)
+        self.assertAlmostEqual(float(proc_value[2]), psutil_value[2], delta=1)
+
+
 # =====================================================================
 # --- system network
 # =====================================================================
 
 
 @unittest.skipIf(not LINUX, "LINUX only")
-class TestSystemNetwork(unittest.TestCase):
+class TestSystemNetIfAddrs(unittest.TestCase):
 
-    def test_net_if_addrs_ips(self):
+    def test_ips(self):
         for name, addrs in psutil.net_if_addrs().items():
             for addr in addrs:
                 if addr.family == psutil.AF_LINK:
@@ -829,7 +891,27 @@ class TestSystemNetwork(unittest.TestCase):
                     self.assertEqual(addr.address, get_ipv4_address(name))
                 # TODO: test for AF_INET6 family
 
-    def test_net_if_stats(self):
+    # XXX - not reliable when having virtual NICs installed by Docker.
+    # @unittest.skipIf(not which('ip'), "'ip' utility not available")
+    # @unittest.skipIf(TRAVIS, "skipped on Travis")
+    # def test_net_if_names(self):
+    #     out = sh("ip addr").strip()
+    #     nics = [x for x in psutil.net_if_addrs().keys() if ':' not in x]
+    #     found = 0
+    #     for line in out.split('\n'):
+    #         line = line.strip()
+    #         if re.search(r"^\d+:", line):
+    #             found += 1
+    #             name = line.split(':')[1].strip()
+    #             self.assertIn(name, nics)
+    #     self.assertEqual(len(nics), found, msg="%s\n---\n%s" % (
+    #         pprint.pformat(nics), out))
+
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemNetIfStats(unittest.TestCase):
+
+    def test_against_ifconfig(self):
         for name, stats in psutil.net_if_stats().items():
             try:
                 out = sh("ifconfig %s" % name)
@@ -841,8 +923,12 @@ class TestSystemNetwork(unittest.TestCase):
                 self.assertEqual(stats.mtu,
                                  int(re.findall(r'(?i)MTU[: ](\d+)', out)[0]))
 
-    @retry_before_failing()
-    def test_net_io_counters(self):
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemNetIOCounters(unittest.TestCase):
+
+    @retry_on_failure()
+    def test_against_ifconfig(self):
         def ifconfig(nic):
             ret = {}
             out = sh("ifconfig %s" % name)
@@ -883,25 +969,13 @@ class TestSystemNetwork(unittest.TestCase):
             self.assertAlmostEqual(
                 stats.dropout, ifconfig_ret['dropout'], delta=10)
 
-    # XXX - not reliable when having virtual NICs installed by Docker.
-    # @unittest.skipIf(not which('ip'), "'ip' utility not available")
-    # @unittest.skipIf(TRAVIS, "skipped on Travis")
-    # def test_net_if_names(self):
-    #     out = sh("ip addr").strip()
-    #     nics = [x for x in psutil.net_if_addrs().keys() if ':' not in x]
-    #     found = 0
-    #     for line in out.split('\n'):
-    #         line = line.strip()
-    #         if re.search(r"^\d+:", line):
-    #             found += 1
-    #             name = line.split(':')[1].strip()
-    #             self.assertIn(name, nics)
-    #     self.assertEqual(len(nics), found, msg="%s\n---\n%s" % (
-    #         pprint.pformat(nics), out))
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemNetConnections(unittest.TestCase):
 
     @mock.patch('psutil._pslinux.socket.inet_ntop', side_effect=ValueError)
     @mock.patch('psutil._pslinux.supports_ipv6', return_value=False)
-    def test_net_connections_ipv6_unsupported(self, supports_ipv6, inet_ntop):
+    def test_emulate_ipv6_unsupported(self, supports_ipv6, inet_ntop):
         # see: https://github.com/giampaolo/psutil/issues/623
         try:
             s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -911,7 +985,7 @@ class TestSystemNetwork(unittest.TestCase):
             pass
         psutil.net_connections(kind='inet6')
 
-    def test_net_connections_mocked(self):
+    def test_emulate_unix(self):
         with mock_open_content(
             '/proc/net/unix',
             textwrap.dedent("""\
@@ -925,16 +999,16 @@ class TestSystemNetwork(unittest.TestCase):
 
 
 # =====================================================================
-# --- system disk
+# --- system disks
 # =====================================================================
 
 
 @unittest.skipIf(not LINUX, "LINUX only")
-class TestSystemDisks(unittest.TestCase):
+class TestSystemDiskPartitions(unittest.TestCase):
 
     @unittest.skipIf(not hasattr(os, 'statvfs'), "os.statvfs() not available")
     @skip_on_not_implemented()
-    def test_disk_partitions_and_usage(self):
+    def test_against_df(self):
         # test psutil.disk_usage() and psutil.disk_partitions()
         # against "df -a"
         def df(path):
@@ -958,7 +1032,7 @@ class TestSystemDisks(unittest.TestCase):
             if abs(usage.used - used) > 10 * 1024 * 1024:
                 self.fail("psutil=%s, df=%s" % (usage.used, used))
 
-    def test_disk_partitions_mocked(self):
+    def test_zfs_fs(self):
         # Test that ZFS partitions are returned.
         with open("/proc/filesystems", "r") as f:
             data = f.read()
@@ -971,7 +1045,7 @@ class TestSystemDisks(unittest.TestCase):
         else:
             # No ZFS partitions on this system. Let's fake one.
             fake_file = io.StringIO(u("nodev\tzfs\n"))
-            with mock.patch('psutil._pslinux.open',
+            with mock.patch('psutil._common.open',
                             return_value=fake_file, create=True) as m1:
                 with mock.patch(
                         'psutil._pslinux.cext.disk_partitions',
@@ -982,7 +1056,22 @@ class TestSystemDisks(unittest.TestCase):
                     assert ret
                     self.assertEqual(ret[0].fstype, 'zfs')
 
-    def test_disk_io_counters_kernel_2_4_mocked(self):
+    def test_emulate_realpath_fail(self):
+        # See: https://github.com/giampaolo/psutil/issues/1307
+        try:
+            with mock.patch('os.path.realpath',
+                            return_value='/non/existent') as m:
+                with self.assertRaises(FileNotFoundError):
+                    psutil.disk_partitions()
+                assert m.called
+        finally:
+            psutil.PROCFS_PATH = "/proc"
+
+
+@unittest.skipIf(not LINUX, "LINUX only")
+class TestSystemDiskIoCounters(unittest.TestCase):
+
+    def test_emulate_kernel_2_4(self):
         # Tests /proc/diskstats parsing format for 2.4 kernels, see:
         # https://github.com/giampaolo/psutil/issues/767
         with mock_open_content(
@@ -1001,7 +1090,7 @@ class TestSystemDisks(unittest.TestCase):
                 self.assertEqual(ret.write_time, 8)
                 self.assertEqual(ret.busy_time, 10)
 
-    def test_disk_io_counters_kernel_2_6_full_mocked(self):
+    def test_emulate_kernel_2_6_full(self):
         # Tests /proc/diskstats parsing format for 2.6 kernels,
         # lines reporting all metrics:
         # https://github.com/giampaolo/psutil/issues/767
@@ -1021,7 +1110,7 @@ class TestSystemDisks(unittest.TestCase):
                 self.assertEqual(ret.write_time, 8)
                 self.assertEqual(ret.busy_time, 10)
 
-    def test_disk_io_counters_kernel_2_6_limited_mocked(self):
+    def test_emulate_kernel_2_6_limited(self):
         # Tests /proc/diskstats parsing format for 2.6 kernels,
         # where one line of /proc/partitions return a limited
         # amount of metrics when it bumps into a partition
@@ -1044,7 +1133,7 @@ class TestSystemDisks(unittest.TestCase):
                 self.assertEqual(ret.write_time, 0)
                 self.assertEqual(ret.busy_time, 0)
 
-    def test_disk_io_counters_include_partitions(self):
+    def test_emulate_include_partitions(self):
         # Make sure that when perdisk=True disk partitions are returned,
         # see:
         # https://github.com/giampaolo/psutil/pull/1313#issuecomment-408626842
@@ -1063,7 +1152,7 @@ class TestSystemDisks(unittest.TestCase):
                 self.assertEqual(ret['nvme0n1'].write_count, 5)
                 self.assertEqual(ret['nvme0n1p1'].write_count, 5)
 
-    def test_disk_io_counters_exclude_partitions(self):
+    def test_emulate_exclude_partitions(self):
         # Make sure that when perdisk=False partitions (e.g. 'sda1',
         # 'nvme0n1p1') are skipped and not included in the total count.
         # https://github.com/giampaolo/psutil/pull/1313#issuecomment-408626842
@@ -1094,7 +1183,7 @@ class TestSystemDisks(unittest.TestCase):
                 self.assertEqual(ret.read_count, 1)
                 self.assertEqual(ret.write_count, 5)
 
-    def test_disk_io_counters_sysfs(self):
+    def test_emulate_use_sysfs(self):
         def exists(path):
             if path == '/proc/diskstats':
                 return False
@@ -1106,7 +1195,7 @@ class TestSystemDisks(unittest.TestCase):
             wsysfs = psutil.disk_io_counters(perdisk=True)
         self.assertEqual(len(wprocfs), len(wsysfs))
 
-    def test_disk_io_counters_not_impl(self):
+    def test_emulate_not_impl(self):
         def exists(path):
             return False
 
@@ -1128,8 +1217,7 @@ class TestMisc(unittest.TestCase):
         psutil_value = psutil.boot_time()
         self.assertEqual(int(vmstat_value), int(psutil_value))
 
-    @mock.patch('psutil.traceback.print_exc')
-    def test_no_procfs_on_import(self, tb):
+    def test_no_procfs_on_import(self):
         my_procfs = tempfile.mkdtemp()
 
         with open(os.path.join(my_procfs, 'stat'), 'w') as f:
@@ -1148,7 +1236,6 @@ class TestMisc(unittest.TestCase):
             patch_point = 'builtins.open' if PY3 else '__builtin__.open'
             with mock.patch(patch_point, side_effect=open_mock):
                 reload_module(psutil)
-                assert tb.called
 
                 self.assertRaises(IOError, psutil.cpu_times)
                 self.assertRaises(IOError, psutil.cpu_times, percpu=True)
@@ -1232,7 +1319,7 @@ class TestMisc(unittest.TestCase):
             self.assertNotEqual(cpu_times_percent.user, 0)
 
     def test_boot_time_mocked(self):
-        with mock.patch('psutil._pslinux.open', create=True) as m:
+        with mock.patch('psutil._common.open', create=True) as m:
             self.assertRaises(
                 RuntimeError,
                 psutil._pslinux.boot_time)
@@ -1461,23 +1548,7 @@ class TestSensorsBattery(unittest.TestCase):
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestSensorsTemperatures(unittest.TestCase):
 
-    @unittest.skipIf(TRAVIS, "unreliable on TRAVIS")
-    def test_emulate_eio_error(self):
-        def open_mock(name, *args, **kwargs):
-            if name.endswith("_input"):
-                raise OSError(errno.EIO, "")
-            else:
-                return orig_open(name, *args, **kwargs)
-
-        orig_open = open
-        patch_point = 'builtins.open' if PY3 else '__builtin__.open'
-        with mock.patch(patch_point, side_effect=open_mock) as m:
-            with warnings.catch_warnings(record=True) as ws:
-                self.assertEqual(psutil.sensors_temperatures(), {})
-                assert m.called
-                self.assertIn("ignoring", str(ws[0].message))
-
-    def test_emulate_data(self):
+    def test_emulate_class_hwmon(self):
         def open_mock(name, *args, **kwargs):
             if name.endswith('/name'):
                 return io.StringIO(u("name"))
@@ -1495,12 +1566,48 @@ class TestSensorsTemperatures(unittest.TestCase):
         orig_open = open
         patch_point = 'builtins.open' if PY3 else '__builtin__.open'
         with mock.patch(patch_point, side_effect=open_mock):
+            # Test case with /sys/class/hwmon
             with mock.patch('glob.glob',
                             return_value=['/sys/class/hwmon/hwmon0/temp1']):
                 temp = psutil.sensors_temperatures()['name'][0]
                 self.assertEqual(temp.label, 'label')
                 self.assertEqual(temp.current, 30.0)
                 self.assertEqual(temp.high, 40.0)
+                self.assertEqual(temp.critical, 50.0)
+
+    def test_emulate_class_thermal(self):
+        def open_mock(name, *args, **kwargs):
+            if name.endswith('0_temp'):
+                return io.BytesIO(b"50000")
+            elif name.endswith('temp'):
+                return io.BytesIO(b"30000")
+            elif name.endswith('0_type'):
+                return io.StringIO(u("critical"))
+            elif name.endswith('type'):
+                return io.StringIO(u("name"))
+            else:
+                return orig_open(name, *args, **kwargs)
+
+        def glob_mock(path):
+            if path == '/sys/class/hwmon/hwmon*/temp*_*':
+                return []
+            elif path == '/sys/class/hwmon/hwmon*/device/temp*_*':
+                return []
+            elif path == '/sys/class/thermal/thermal_zone*':
+                return ['/sys/class/thermal/thermal_zone0']
+            elif path == '/sys/class/thermal/thermal_zone0/trip_point*':
+                return ['/sys/class/thermal/thermal_zone1/trip_point_0_type',
+                        '/sys/class/thermal/thermal_zone1/trip_point_0_temp']
+            return []
+
+        orig_open = open
+        patch_point = 'builtins.open' if PY3 else '__builtin__.open'
+        with mock.patch(patch_point, side_effect=open_mock):
+            with mock.patch('glob.glob', create=True, side_effect=glob_mock):
+                temp = psutil.sensors_temperatures()['name'][0]
+                self.assertEqual(temp.label, '')
+                self.assertEqual(temp.current, 30.0)
+                self.assertEqual(temp.high, 50.0)
                 self.assertEqual(temp.critical, 50.0)
 
 
@@ -1679,7 +1786,7 @@ class TestProcess(unittest.TestCase):
 
     # TODO: re-enable this test.
     # def test_num_ctx_switches_mocked(self):
-    #     with mock.patch('psutil._pslinux.open', create=True) as m:
+    #     with mock.patch('psutil._common.open', create=True) as m:
     #         self.assertRaises(
     #             NotImplementedError,
     #             psutil._pslinux.Process(os.getpid()).num_ctx_switches)
@@ -1689,12 +1796,12 @@ class TestProcess(unittest.TestCase):
         # see: https://github.com/giampaolo/psutil/issues/639
         p = psutil.Process()
         fake_file = io.StringIO(u('foo\x00bar\x00'))
-        with mock.patch('psutil._pslinux.open',
+        with mock.patch('psutil._common.open',
                         return_value=fake_file, create=True) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar'])
             assert m.called
         fake_file = io.StringIO(u('foo\x00bar\x00\x00'))
-        with mock.patch('psutil._pslinux.open',
+        with mock.patch('psutil._common.open',
                         return_value=fake_file, create=True) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar', ''])
             assert m.called
@@ -1703,14 +1810,24 @@ class TestProcess(unittest.TestCase):
         # see: https://github.com/giampaolo/psutil/issues/1179
         p = psutil.Process()
         fake_file = io.StringIO(u('foo bar '))
-        with mock.patch('psutil._pslinux.open',
+        with mock.patch('psutil._common.open',
                         return_value=fake_file, create=True) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar'])
             assert m.called
         fake_file = io.StringIO(u('foo bar  '))
-        with mock.patch('psutil._pslinux.open',
+        with mock.patch('psutil._common.open',
                         return_value=fake_file, create=True) as m:
             self.assertEqual(p.cmdline(), ['foo', 'bar', ''])
+            assert m.called
+
+    def test_cmdline_mixed_separators(self):
+        # https://github.com/giampaolo/psutil/issues/
+        #    1179#issuecomment-552984549
+        p = psutil.Process()
+        fake_file = io.StringIO(u('foo\x20bar\x00'))
+        with mock.patch('psutil._common.open',
+                        return_value=fake_file, create=True) as m:
+            self.assertEqual(p.cmdline(), ['foo', 'bar'])
             assert m.called
 
     def test_readlink_path_deleted_mocked(self):
@@ -1776,9 +1893,8 @@ class TestProcess(unittest.TestCase):
                 '/proc/%s/smaps' % os.getpid(),
                 IOError(errno.ENOENT, "")) as m:
             p = psutil.Process()
-            with self.assertRaises(IOError) as err:
+            with self.assertRaises(FileNotFoundError):
                 p.memory_maps()
-            self.assertEqual(err.exception.errno, errno.ENOENT)
             assert m.called
 
     @unittest.skipIf(not HAS_RLIMIT, "not supported")
@@ -1850,6 +1966,9 @@ class TestProcess(unittest.TestCase):
             "0",      # cnswap
             "0",      # exit_signal
             "6",      # processor
+            "0",      # rt priority
+            "0",      # policy
+            "7",      # delayacct_blkio_ticks
         ]
         content = " ".join(args).encode()
         with mock_open_content('/proc/%s/stat' % os.getpid(), content):
@@ -1864,6 +1983,7 @@ class TestProcess(unittest.TestCase):
             self.assertEqual(cpu.system, 3 / CLOCK_TICKS)
             self.assertEqual(cpu.children_user, 4 / CLOCK_TICKS)
             self.assertEqual(cpu.children_system, 5 / CLOCK_TICKS)
+            self.assertEqual(cpu.iowait, 7 / CLOCK_TICKS)
             self.assertEqual(p.cpu_num(), 6)
 
     def test_status_file_parsing(self):
@@ -1946,7 +2066,7 @@ class TestProcessAgainstStatus(unittest.TestCase):
         value = tuple(map(int, value.split()[1:4]))
         self.assertEqual(self.proc.gids(), value)
 
-    @retry_before_failing()
+    @retry_on_failure()
     def test_num_ctx_switches(self):
         value = self.read_status_file("voluntary_ctxt_switches:")
         self.assertEqual(self.proc.num_ctx_switches().voluntary, value)
@@ -1978,14 +2098,6 @@ class TestProcessAgainstStatus(unittest.TestCase):
 @unittest.skipIf(not LINUX, "LINUX only")
 class TestUtils(unittest.TestCase):
 
-    def test_open_text(self):
-        with psutil._psplatform.open_text(__file__) as f:
-            self.assertEqual(f.mode, 'rt')
-
-    def test_open_binary(self):
-        with psutil._psplatform.open_binary(__file__) as f:
-            self.assertEqual(f.mode, 'rb')
-
     def test_readlink(self):
         with mock.patch("os.readlink", return_value="foo (deleted)") as m:
             self.assertEqual(psutil._psplatform.readlink("bar"), "foo")
@@ -2002,4 +2114,5 @@ class TestUtils(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    run_test_module_by_name(__file__)
+    from psutil.tests.runner import run
+    run(__file__)

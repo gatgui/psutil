@@ -1,4 +1,4 @@
-# Build: 1 (bump this up by 1 to force an appveyor run)
+# Build: 3 (bump this up by 1 to force an appveyor run)
 
 os: Visual Studio 2015
 
@@ -27,6 +27,10 @@ environment:
       PYTHON_VERSION: "3.7.x"
       PYTHON_ARCH: "32"
 
+    - PYTHON: "C:\\Python38"
+      PYTHON_VERSION: "3.8.x"
+      PYTHON_ARCH: "32"
+
     # 64 bits
 
     - PYTHON: "C:\\Python27-x64"
@@ -43,6 +47,10 @@ environment:
 
     - PYTHON: "C:\\Python37-x64"
       PYTHON_VERSION: "3.7.x"
+      PYTHON_ARCH: "64"
+
+    - PYTHON: "C:\\Python38-x64"
+      PYTHON_VERSION: "3.8.x"
       PYTHON_ARCH: "64"
 
 init:
@@ -64,6 +72,8 @@ test_script:
 
 after_test:
   - "%WITH_COMPILER% %PYTHON%/python.exe scripts/internal/winmake.py wheel"
+  - "%WITH_COMPILER% %PYTHON%/python.exe scripts/internal/print_access_denied.py"
+  - "%WITH_COMPILER% %PYTHON%/python.exe scripts/internal/print_api_speed.py"
 
 artifacts:
   - path: dist\*
@@ -89,12 +99,6 @@ only_commits:
     - psutil/_psutil_windows.*
     - psutil/_pswindows.py
     - psutil/arch/windows/*
-    - psutil/tests/__init__.py
-    - psutil/tests/__main__.py
-    - psutil/tests/test_memory_leaks.py
-    - psutil/tests/test_misc.py
-    - psutil/tests/test_process.py
-    - psutil/tests/test_system.py
-    - psutil/tests/test_windows.py
+    - psutil/tests/*
     - scripts/*
     - setup.py
